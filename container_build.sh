@@ -133,7 +133,7 @@ build() {
 	  ;;
 	  *)
 	      add_entrypoints "${conman[@]}" "${REGISTRY_PATH}"/"${target}" "${version}"
-	      add_rag "${conman[@]}" "${target}" "${version}"
+	      #add_rag "${conman[@]}" "${target}" "${version}"
 	      rm_container_image
       esac
       ;;
