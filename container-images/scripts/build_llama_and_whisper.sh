@@ -175,6 +175,11 @@ dnf_install() {
   fi
 
   dnf_install_ffmpeg
+
+  if [[ "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" == y ]]; then
+      dnf install -y gdb strace
+  fi
+
   dnf -y clean all
 }
 
@@ -274,7 +279,9 @@ clone_and_build_whisper_cpp() {
   cmake_steps "${whisper_flags[@]}"
   mkdir -p "$install_prefix/bin"
   cd ..
-  rm -rf whisper.cpp
+  if [[ "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" != y ]]; then
+      rm -rf whisper.cpp
+  fi
 }
 
 clone_and_build_llama_cpp() {
@@ -289,7 +296,9 @@ clone_and_build_llama_cpp() {
   cmake_steps "${common_flags[@]}"
   install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
   cd ..
-  rm -rf llama.cpp
+  if [[ "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" != y ]]; then
+      rm -rf llama.cpp
+  fi
 }
 
 install_ramalama() {
