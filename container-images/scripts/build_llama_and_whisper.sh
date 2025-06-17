@@ -22,6 +22,7 @@ dnf_install_remoting() {
     LIBDRM_VERSION=2.4.123-2.el9.aarch64
     curl -Ssf https://mirror.stream.centos.org/9-stream/AppStream/aarch64/os/Packages/libdrm-devel-${LIBDRM_VERSION}.rpm -O
     rpm -i --nosignature --nodeps libdrm-devel-${LIBDRM_VERSION}.rpm
+    dnf install -y gdb strace
 }
 
 dnf_install_intel_gpu() {
@@ -274,7 +275,7 @@ clone_and_build_whisper_cpp() {
   cmake_steps "${whisper_flags[@]}"
   mkdir -p "$install_prefix/bin"
   cd ..
-  rm -rf whisper.cpp
+  # rm -rf whisper.cpp
 }
 
 clone_and_build_llama_cpp() {
@@ -289,7 +290,7 @@ clone_and_build_llama_cpp() {
   cmake_steps "${common_flags[@]}"
   install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
   cd ..
-  rm -rf llama.cpp
+  # rm -rf llama.cpp
 }
 
 install_ramalama() {
