@@ -18,6 +18,12 @@ available() {
   command -v "$1" >/dev/null
 }
 
+dnf_install_remoting() {
+    LIBDRM_VERSION=2.4.123-2.el9.aarch64
+    curl -Ssf https://mirror.stream.centos.org/9-stream/AppStream/aarch64/os/Packages/libdrm-devel-${LIBDRM_VERSION}.rpm -O
+    rpm -i --nosignature --nodeps libdrm-devel-${LIBDRM_VERSION}.rpm
+}
+
 dnf_install_intel_gpu() {
   local intel_rpms=("intel-oneapi-mkl-sycl-devel" "intel-oneapi-dnnl-devel"
     "intel-oneapi-compiler-dpcpp-cpp" "intel-level-zero"
@@ -164,6 +170,8 @@ dnf_install() {
     dnf_install_intel_gpu
   elif [ "$containerfile" = "cann" ]; then
     dnf_install_cann
+  elif [ "$containerfile" = "remoting" ]; then
+    dnf_install_remoting
   fi
 
   dnf_install_ffmpeg
@@ -242,23 +250,27 @@ configure_common_flags() {
   musa)
     common_flags+=("-DGGML_MUSA=ON")
     ;;
+  remoting)
+    common_flags+=("-DGGML_REMOTINGFRONTEND=ON")
+    ;;
   esac
 }
 
 clone_and_build_whisper_cpp() {
   local whisper_flags=("${common_flags[@]}")
   # last time we tried to upgrade the whisper sha, rocm build broke
-  local whisper_cpp_sha="d682e150908e10caa4c15883c633d7902d385237"
+  local whisper_cpp_sha="${WHISPER_CPP_PULL_REF:-main}"
   whisper_flags+=("-DBUILD_SHARED_LIBS=OFF")
   # See: https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md#compilation-options
   if [ "$containerfile" = "musa" ]; then
     whisper_flags+=("-DCMAKE_POSITION_INDEPENDENT_CODE=ON")
   fi
 
-  git clone https://github.com/ggerganov/whisper.cpp
+  git clone https://github.com/kpouget/whisper.cpp
   cd whisper.cpp
   git submodule update --init --recursive
-  git reset --hard "$whisper_cpp_sha"
+  git fetch origin "$whisper_cpp_sha"
+  git reset --hard FETCH_HEAD
   cmake_steps "${whisper_flags[@]}"
   mkdir -p "$install_prefix/bin"
   cd ..
@@ -266,13 +278,14 @@ clone_and_build_whisper_cpp() {
 }
 
 clone_and_build_llama_cpp() {
-  local llama_cpp_sha="97340b4c9924be86704dbf155e97c8319849ee19"
+  local llama_cpp_sha="${LLAMA_CPP_PULL_REF:-main}"
   local install_prefix
   install_prefix=$(set_install_prefix)
-  git clone https://github.com/ggml-org/llama.cpp
+  git clone https://github.com/kpouget/llama.cpp
   cd llama.cpp
   git submodule update --init --recursive
-  git reset --hard "$llama_cpp_sha"
+  git fetch origin "$llama_cpp_sha"
+  git reset --hard FETCH_HEAD
   cmake_steps "${common_flags[@]}"
   install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
   cd ..
