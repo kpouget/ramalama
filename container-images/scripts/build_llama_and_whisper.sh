@@ -285,6 +285,7 @@ clone_and_build_whisper_cpp() {
 }
 
 clone_and_build_llama_cpp() {
+  local containerfile=$1
   local llama_cpp_sha="${LLAMA_CPP_PULL_REF:-main}"
   local install_prefix
   install_prefix=$(set_install_prefix)
@@ -294,7 +295,9 @@ clone_and_build_llama_cpp() {
   git fetch origin "$llama_cpp_sha"
   git reset --hard FETCH_HEAD
   cmake_steps "${common_flags[@]}"
-  install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
+  if [[ "$containerfile" != "remoting" ]]; then
+      install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
+  fi
   cd ..
   if [[ "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" != y ]]; then
       rm -rf llama.cpp
@@ -340,7 +343,10 @@ main() {
   if [ "$uname_m" != "s390x" ]; then
     clone_and_build_whisper_cpp
   fi
-  common_flags+=("-DLLAMA_CURL=ON" "-DGGML_RPC=ON")
+  common_flags+=("-DLLAMA_CURL=ON")
+  if [[ "$containerfile" != "remoting" ]]; then
+      common_flags+=("-DGGML_RPC=ON")
+  fi
   case "$containerfile" in
   ramalama)
     if [ "$uname_m" = "x86_64" ] || [ "$uname_m" = "aarch64" ]; then
@@ -351,7 +357,7 @@ main() {
     ;;
   esac
 
-  clone_and_build_llama_cpp
+  clone_and_build_llama_cpp "$containerfile"
   available dnf && dnf_remove
   rm -rf /var/cache/*dnf* /opt/rocm-*/lib/*/library/*gfx9*
   ldconfig # needed for libraries
