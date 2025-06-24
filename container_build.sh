@@ -36,10 +36,10 @@ add_build_platform() {
   conman_build+=("-f" "container-images/${target}/Containerfile" ".")
 
   if [ -n "${LLAMA_CPP_PULL_REF:-}" ]; then
-      conman_build+=("-env" "LLAMA_CPP_PULL_REF='$LLAMA_CPP_PULL_REF'")
+      conman_build+=("--env" "LLAMA_CPP_PULL_REF='$LLAMA_CPP_PULL_REF'")
   fi
   if [ -n "${LLAMA_CPP_REPO:-}" ]; then
-      conman_build+=("-env" "LLAMA_CPP_REPO='$LLAMA_CPP_REPO'")
+      conman_build+=("--env" "LLAMA_CPP_REPO='$LLAMA_CPP_REPO'")
   fi
 }
 
