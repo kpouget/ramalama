@@ -289,7 +289,7 @@ clone_and_build_llama_cpp() {
   local llama_cpp_sha="${LLAMA_CPP_PULL_REF:-main}"
   local install_prefix
   install_prefix=$(set_install_prefix)
-  git clone https://github.com/kpouget/llama.cpp
+  git clone "${LLAMA_CPP_REPO:-https://github.com/kpouget/llama.cpp}"
   cd llama.cpp
   git submodule update --init --recursive
   git fetch origin "$llama_cpp_sha"
