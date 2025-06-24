@@ -34,6 +34,10 @@ add_build_platform() {
       conman_build+=("-t" "$REGISTRY_PATH/${target}")
   fi
   conman_build+=("-f" "container-images/${target}/Containerfile" ".")
+
+  if [ -n "${LLAMA_CPP_PULL_REF:-}" ]; then
+      conman_build+=("-e" "LLAMA_CPP_PULL_REF='$LLAMA_CPP_PULL_REF'")
+  fi
 }
 
 rm_container_image() {
