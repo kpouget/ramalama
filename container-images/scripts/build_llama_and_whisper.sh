@@ -231,7 +231,13 @@ set_install_prefix() {
 }
 
 configure_common_flags() {
-  common_flags=("-DGGML_NATIVE=OFF" "-DGGML_CMAKE_BUILD_TYPE=Release")
+  common_flags=("-DGGML_NATIVE=OFF")
+  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG:-}" == y ]]; then
+      common_flags=("-DGGML_CMAKE_BUILD_TYPE=Debug")
+  else
+      common_flags=("-DGGML_CMAKE_BUILD_TYPE=Release")
+  fi
+
   case "$containerfile" in
   rocm*)
     if [ "${ID}" = "fedora" ]; then
