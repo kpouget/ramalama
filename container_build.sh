@@ -41,6 +41,13 @@ add_build_platform() {
   if [ -n "${LLAMA_CPP_REPO:-}" ]; then
       conman_build+=("--env" "LLAMA_CPP_REPO=$LLAMA_CPP_REPO")
   fi
+
+  if [ -n "${RAMALAMA_IMAGE_BUILD_DEBUG:-}" ]; then
+      conman_build+=("--env" "RAMALAMA_IMAGE_BUILD_DEBUG=$RAMALAMA_IMAGE_BUILD_DEBUG")
+  fi
+  if [ -n "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" ]; then
+      conman_build+=("--env" "RAMALAMA_IMAGE_INCLUDE_DEBUG=$RAMALAMA_IMAGE_INCLUDE_DEBUG")
+  fi
 }
 
 rm_container_image() {
