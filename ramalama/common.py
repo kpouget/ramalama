@@ -13,7 +13,6 @@ import shutil
 import string
 import subprocess
 import sys
-import sysconfig
 import time
 import urllib.error
 from functools import lru_cache
@@ -549,15 +548,6 @@ def tagged_image(image: str) -> str:
     return f"{image}:{minor_release()}"
 
 
-def get_cmd_with_wrapper(cmd_arg: str) -> str:
-    data_path = sysconfig.get_path("data")
-    for directory in ["", f"{data_path}/", "/opt/homebrew/", "/usr/local/", "/usr/"]:
-        if os.path.exists(f"{directory}libexec/ramalama/{cmd_arg}"):
-            return f"{directory}libexec/ramalama/{cmd_arg}"
-
-    return ""
-
-
 def check_cuda_version() -> tuple[int, int]:
     """
     Check the CUDA version installed on the system by parsing the output of nvidia-smi --version.
@@ -637,7 +627,7 @@ class AccelImageArgsOtherRuntimeRAG(Protocol):
 AccelImageArgs = None | AccelImageArgsVLLMRuntime | AccelImageArgsOtherRuntime | AccelImageArgsOtherRuntimeRAG
 
 
-def accel_image(config: Config) -> str:
+def accel_image(config: Config, pull=True) -> str:
     """
     Selects and the appropriate image based on config, arguments, environment.
     """
@@ -660,7 +650,7 @@ def accel_image(config: Config) -> str:
         return "registry.redhat.io/rhelai1/ramalama-vllm"
 
     vers = minor_release()
-    if attempt_to_use_versioned(config.engine, image, vers, True):
+    if not pull or attempt_to_use_versioned(config.engine, image, vers, True):
         return f"{image}:{vers}"
 
     return f"{image}:latest"

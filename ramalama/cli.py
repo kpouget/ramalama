@@ -27,7 +27,6 @@ from ramalama.chat import default_prefix
 from ramalama.common import accel_image, get_accel, perror
 from ramalama.config import CONFIG
 from ramalama.logger import configure_logger, logger
-from ramalama.migrate import ModelStoreImport
 from ramalama.model import MODEL_TYPES
 from ramalama.model_factory import ModelFactory, New
 from ramalama.model_store import GlobalModelStore
@@ -192,7 +191,7 @@ The RAMALAMA_CONTAINER_ENGINE environment variable modifies default behaviour.""
     )
     parser.add_argument(
         "--image",
-        default=accel_image(CONFIG),
+        default=accel_image(CONFIG, pull=False),
         help="OCI container image to run with the specified AI model",
         action=OverrideDefaultAction,
         completer=local_images,
@@ -224,13 +223,6 @@ The RAMALAMA_IN_CONTAINER environment variable modifies default behaviour.""",
         "--store",
         default=CONFIG.store,
         help="store AI Models in the specified directory",
-    )
-    parser.add_argument(
-        "--use-model-store",
-        dest="use_model_store",
-        default=CONFIG.use_model_store,
-        action="store_true",
-        help="use the model store feature",
     )
     parser.add_argument(
         "--noout",
@@ -270,7 +262,7 @@ def parse_arguments(parser):
 
 def post_parse_setup(args):
     """Perform additional setup after parsing arguments."""
-    if hasattr(args, "MODEL") and args.subcommand != "rm":
+    if getattr(args, "MODEL", None) and args.subcommand != "rm":
         resolved_model = shortnames.resolve(args.MODEL)
         if resolved_model:
             args.UNRESOLVED_MODEL = args.MODEL
@@ -509,33 +501,7 @@ def _list_models_from_store(args):
 
 
 def _list_models(args):
-    mycwd = os.getcwd()
-    if args.use_model_store:
-        return _list_models_from_store(args)
-
-    os.chdir(f"{args.store}/models/")
-    models = []
-
-    # Collect model data
-    for path in list_files_by_modification(args):
-        if path.is_symlink():
-            if str(path).startswith("file/"):
-                name = str(path).replace("/", ":///", 1)
-            else:
-                name = str(path).replace("/", "://", 1)
-            file_epoch = path.lstat().st_mtime
-            # convert to iso format
-            modified = datetime.fromtimestamp(file_epoch, tz=timezone.utc).isoformat()
-            size = get_size(path)
-
-            # Store data for later use
-            models.append({"name": name, "modified": modified, "size": size})
-
-    if args.container:
-        models.extend(ramalama.oci.list_models(args))
-
-    os.chdir(mycwd)
-    return models
+    return _list_models_from_store(args)
 
 
 def info_cli(args):
@@ -771,10 +737,16 @@ def runtime_options(parser, command):
         parser.add_argument(
             "-c",
             "--ctx-size",
-            "--max-model-len",
             dest="context",
             default=CONFIG.ctx_size,
             help="size of the prompt context (0 = loaded from model)",
+            completer=suppressCompleter,
+        )
+        parser.add_argument(
+            "--max-model-len",
+            dest="context",
+            default=CONFIG.ctx_size,
+            help=argparse.SUPPRESS,
             completer=suppressCompleter,
         )
     if command == "serve":
@@ -897,6 +869,13 @@ def runtime_options(parser, command):
             default="on",
             help="enable or disable the web UI (default: on)",
         )
+        parser.add_argument(
+            "--dri",
+            dest="dri",
+            choices=["on", "off"],
+            default="on",
+            help="mount /dev/dri into the container when running llama-stack (default: on)",
+        )
 
 
 def default_threads():
@@ -913,6 +892,12 @@ def default_threads():
 def chat_parser(subparsers):
     parser = subparsers.add_parser("chat", help="OpenAI chat with the specified RESTAPI URL")
     parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.getenv("API_KEY"),
+        help="OpenAI-compatible API key. Can also be set via the API_KEY environment variable.",
+    )
+    parser.add_argument(
         '--color',
         '--colour',
         default="auto",
@@ -920,7 +905,8 @@ def chat_parser(subparsers):
         help='possible values are "never", "always" and "auto".',
     )
     parser.add_argument("--prefix", type=str, help="prefix for the user prompt", default=default_prefix())
-    parser.add_argument("--url", type=str, default="http://127.0.0.1:8080", help="the host to send requests to")
+    parser.add_argument("--rag", type=str, help="a file or directory to use as context for the chat")
+    parser.add_argument("--url", type=str, default="http://127.0.0.1:8080/v1", help="the url to send requests to")
     parser.add_argument("MODEL", completer=local_models)  # positional argument
     parser.add_argument(
         "ARGS", nargs="*", help="overrides the default prompt, and the output is returned without entering the chatbot"
@@ -940,6 +926,7 @@ def run_parser(subparsers):
     )
     parser.add_argument("--prefix", type=str, help="prefix for the user prompt", default=default_prefix())
     parser.add_argument("MODEL", completer=local_models)  # positional argument
+
     parser.add_argument(
         "ARGS",
         nargs="*",
@@ -1133,7 +1120,17 @@ def rm_cli(args):
 
     models = GlobalModelStore(args.store).list_models(engine=args.engine, show_container=args.container)
 
-    return _rm_model([model for model in models.keys()], args)
+    failed_models = []
+    for model in models.keys():
+        try:
+            _rm_model([model], args)
+        except Exception as e:
+            failed_models.append((model, str(e)))
+    if failed_models:
+        for model, error in failed_models:
+            perror(f"Failed to remove model '{model}': {error}")
+        failed_names = ', '.join([model for model, _ in failed_models])
+        raise Exception(f"Failed to remove the following models: {failed_names}")
 
 
 def perplexity_parser(subparsers):
@@ -1171,11 +1168,6 @@ def main():
         argcomplete.autocomplete(parser)
     except Exception:
         pass
-
-    try:
-        ModelStoreImport(args.store).import_all()
-    except Exception as ex:
-        perror(f"Error: Failed to import models to new store: {ex}")
 
     def eprint(e, exit_code):
         perror("Error: " + str(e).strip("'\""))
