@@ -15,6 +15,10 @@ Chat with an OpenAI Rest API
 
 ## OPTIONS
 
+#### **--api-key**
+OpenAI-compatible API key.
+Can also be set via the API_KEY environment variable.
+
 #### **--color**
 Indicate whether or not to use color in the chat.
 Possible values are "never", "always" and "auto". (default: auto)
@@ -25,8 +29,12 @@ Show this help message and exit
 #### **--prefix**
 Prefix for the user prompt (default: 🦭 > )
 
+#### **--rag**=path
+A file or directory of files to be loaded and provided as local context in the chat history.
+
 #### **--url**=URL
 The host to send requests to (default: http://127.0.0.1:8080)
+
 
 ## EXAMPLES
 

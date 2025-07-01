@@ -14,6 +14,8 @@ from datetime import timedelta
 from ramalama.config import CONFIG
 from ramalama.console import EMOJI, should_colorize
 from ramalama.engine import dry_run, stop_container
+from ramalama.file_upload.file_loader import FileUpLoader
+from ramalama.logger import logger
 
 
 def res(response, color):
@@ -70,13 +72,32 @@ class RamaLamaShell(cmd.Cmd):
         self.request_in_process = False
         self.prompt = args.prefix
 
-        self.url = f"{args.url}/v1/chat/completions"
+        self.url = f"{args.url}/chat/completions"
+        self.prep_rag_message()
+
+    def prep_rag_message(self):
+        if (context := getattr(self.args, "rag", None)) is None:
+            return
+
+        if not (message_content := FileUpLoader(context).load()):
+            return
+
+        self.conversation_history.append({"role": "system", "content": message_content})
 
     def handle_args(self):
-        if self.args.ARGS:
-            self.default(" ".join(self.args.ARGS))
+        prompt = " ".join(self.args.ARGS) if self.args.ARGS else None
+        if not sys.stdin.isatty():
+            stdin = sys.stdin.read()
+            if prompt:
+                prompt += f"\n\n{stdin}"
+            else:
+                prompt = stdin
+
+        if prompt:
+            self.default(prompt)
             self.kills()
             return True
+
         return False
 
     def do_EOF(self, user_content):
@@ -106,6 +127,14 @@ class RamaLamaShell(cmd.Cmd):
         headers = {
             "Content-Type": "application/json",
         }
+
+        if getattr(self.args, "api_key", None):
+            if len(self.args.api_key) < 20:
+                print("Warning: Provided API key is invalid.")
+
+            headers["Authorization"] = f"Bearer {self.args.api_key}"
+
+        logger.debug("Request: URL=%s, Data=%s, Headers=%s", self.url, json_data, headers)
         request = urllib.request.Request(self.url, data=json_data, headers=headers, method="POST")
 
         return request
@@ -141,11 +170,11 @@ class RamaLamaShell(cmd.Cmd):
         return None
 
     def kills(self):
-        if self.args.pid2kill:
+        if getattr(self.args, "pid2kill", False):
             os.kill(self.args.pid2kill, signal.SIGINT)
             os.kill(self.args.pid2kill, signal.SIGTERM)
             os.kill(self.args.pid2kill, signal.SIGKILL)
-        elif self.args.name:
+        elif getattr(self.args, "name", None):
             stop_container(self.args, self.args.name)
 
     def loop(self):
@@ -179,7 +208,7 @@ def chat(args):
         prompt = dry_run(args.ARGS)
         print(f"\nramalama chat --color {args.color} --prefix  \"{args.prefix}\" --url {args.url} {prompt}")
         return
-    if hasattr(args, "keepalive") and args.keepalive:
+    if getattr(args, "keepalive", False):
         signal.signal(signal.SIGALRM, alarm_handler)
         signal.alarm(convert_to_seconds(args.keepalive))
 
@@ -188,7 +217,8 @@ def chat(args):
         if shell.handle_args():
             return
         shell.loop()
-    except TimeoutException:
+    except TimeoutException as e:
+        logger.debug(f"Timeout Exception: {e}")
         # Handle the timeout, e.g., print a message and exit gracefully
         print("")
         pass

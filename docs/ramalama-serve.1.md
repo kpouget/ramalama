@@ -60,6 +60,9 @@ Example: --device=/dev/dri/renderD128:/dev/xvdc:rwm
 
 The device specification is passed directly to the underlying container engine. See documentation of the supported container engine for more information.
 
+#### **--dri**=*on* | *off*
+Enable or disable mounting `/dev/dri` into the container when running with `--api=llama-stack` (enabled by default). Use to prevent access to the host device when not required, or avoid errors in environments where `/dev/dri` is not available.
+
 #### **--env**=
 
 Set environment variables inside of the container.
@@ -88,7 +91,6 @@ show this help message and exit
 IP address for llama.cpp to listen on.
 
 #### **--model-draft**
-
 
 A draft model is a smaller, faster model that helps accelerate the decoding
 process of larger, more complex models, like Large Language Models (LLMs). It
@@ -370,8 +372,8 @@ spec:
       containers:
       - name: model-server
 	image: quay.io/ramalama/ramalama:0.8
-	command: ["/usr/libexec/ramalama/ramalama-serve-core"]
-	args: ['llama-server', '--port', '8081', '--model', '/mnt/models/model.file', '--alias', 'quay.io/rhatdan/granite:latest', '--ctx-size', 2048, '--temp', '0.8', '--jinja', '--cache-reuse', '256', '-v', '--threads', 16, '--host', '127.0.0.1']
+	command: ["llama-server"]
+	args: ['--port', '8081', '--model', '/mnt/models/model.file', '--alias', 'quay.io/rhatdan/granite:latest', '--ctx-size', 2048, '--temp', '0.8', '--jinja', '--cache-reuse', '256', '-v', '--threads', 16, '--host', '127.0.0.1']
 	securityContext:
 	  allowPrivilegeEscalation: false
 	  capabilities:

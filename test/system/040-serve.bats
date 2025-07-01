@@ -338,7 +338,7 @@ verify_begin=".*run --rm"
     model=tiny
     name=c_$(safename)
     run_ramalama pull ${model}
-    run_ramalama serve -d --name=${name} --api llama-stack --port 1234 ${model}
+    run_ramalama serve -d --name=${name} --api llama-stack --dri off --port 1234 ${model}
     is "$output" ".*Llama Stack RESTAPI: http://localhost:1234" "reveal llama stack url"
     is "$output" ".*OpenAI RESTAPI: http://localhost:1234/v1/openai" "reveal openai url"
 
@@ -363,9 +363,9 @@ verify_begin=".*run --rm"
     is "$output" ".*Generating Kubernetes YAML file: ${name}.yaml" "generate .yaml file"
 
     run cat /tmp/$name.yaml
-    is "$output" ".*command: \[\".*serve.*\"\]" "Should command"
+    is "$output" ".*llama-server" "Should command"
     is "$output" ".*hostPort: 1234" "Should container container port"
-    is "$output" ".*llama stack run --image-type venv /etc/ramalama/ramalama-run.yaml" "Should container llama-stack"
+    is "$output" ".*quay.io/ramalama/llama-stack" "Should container llama-stack"
     rm /tmp/$name.yaml
 }
 
