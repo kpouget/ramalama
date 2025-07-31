@@ -4,9 +4,11 @@ import subprocess
 import tempfile
 from urllib.parse import urlparse
 
-from ramalama.common import get_accel_env_vars, run_cmd, set_accel_env_vars
+from ramalama.common import get_accel_env_vars, perror, run_cmd, set_accel_env_vars
 from ramalama.engine import Engine
 from ramalama.logger import logger
+
+INPUT_DIR = "/docs"
 
 
 class Rag:
@@ -21,10 +23,10 @@ class Rag:
         set_accel_env_vars()
 
     def build(self, source, target, args):
-        print(f"\nBuilding {target} ...")
+        perror(f"\nBuilding {target} ...")
         contextdir = os.path.dirname(source)
         src = os.path.basename(source)
-        print(f"adding {src} ...")
+        perror(f"adding {src} ...")
         cfile = f"""\
 FROM scratch
 COPY {src} /vector.db
@@ -63,8 +65,9 @@ COPY {src} /vector.db
         parsed = urlparse(path)
         if parsed.scheme in ["file", ""] and parsed.netloc == "":
             if os.path.exists(parsed.path):
-                fpath = os.path.realpath(parsed.path)
-                self.engine.add(["-v", f"{fpath}:/docs/{fpath}:ro,z"])
+                fpath = os.path.realpath(parsed.path.rstrip("/"))
+                input_name = os.path.basename(fpath)
+                self.engine.add(["-v", f"{fpath}:{INPUT_DIR}/{input_name}:ro,z"])
             else:
                 raise ValueError(f"{path} does not exist")
             return
@@ -72,11 +75,11 @@ COPY {src} /vector.db
 
     def generate(self, args):
         args.nocapdrop = True
-        self.engine = Engine(args)
         if not args.container:
             raise KeyError("rag command requires a container. Can not be run with --nocontainer option.")
         if not args.engine or args.engine == "":
             raise KeyError("rag command requires a container. Can not be run without a container engine.")
+        self.engine = Engine(args)
 
         tmpdir = "."
         if not os.access(tmpdir, os.W_OK):
@@ -85,9 +88,18 @@ COPY {src} /vector.db
         for path in args.PATH:
             self._handle_paths(path)
 
-        ragdb = tempfile.TemporaryDirectory(dir=tmpdir, prefix='RamaLama_rag_')
-        dbdir = os.path.join(ragdb.name, "vectordb")
-        os.mkdir(dbdir)
+        # If user specifies path, then don't use it
+
+        target_is_oci = self.target.startswith("oci://") or (
+            not self.target.startswith("file://") and self.target[0] not in {".", "/"}
+        )
+        if target_is_oci:
+            ragdb = tempfile.TemporaryDirectory(dir=tmpdir, prefix='RamaLama_rag_')
+            dbdir = os.path.join(ragdb.name, "vectordb")
+        else:
+            dbdir = self.target
+
+        os.makedirs(dbdir, exist_ok=True)
         self.engine.add(["-v", f"{dbdir}:/output:z"])
         for k, v in get_accel_env_vars().items():
             # Special case for Cuda
@@ -102,8 +114,9 @@ COPY {src} /vector.db
 
             self.engine.add(["-e", f"{k}={v}"])
 
-        self.engine.add([rag_image(args.image)])
-        self.engine.add(["doc2rag", "/output", "/docs/"])
+        image = args.image if getattr(args, "image_override", False) else rag_image(args.image)
+        self.engine.add([image])
+        self.engine.add(["doc2rag", "--format", args.format, "/output", INPUT_DIR])
         if args.ocr:
             self.engine.add(["--ocr"])
         if len(self.urls) > 0:
@@ -113,11 +126,13 @@ COPY {src} /vector.db
             return
         try:
             self.engine.run()
-            print(self.build(dbdir, self.target, args))
+            if target_is_oci:
+                print(self.build(dbdir, self.target, args))
         except subprocess.CalledProcessError as e:
             raise e
         finally:
-            shutil.rmtree(ragdb.name, ignore_errors=True)
+            if target_is_oci:
+                shutil.rmtree(ragdb.name, ignore_errors=True)
 
 
 def rag_image(image) -> str:

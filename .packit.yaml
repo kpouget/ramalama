@@ -7,11 +7,11 @@ upstream_tag_template: v{version}
 packages:
   ramalama-fedora:
     pkg_tool: fedpkg
-    downstream_package_name: python-ramalama
-    specfile_path: rpm/python-ramalama.spec
+    downstream_package_name: ramalama
+    specfile_path: rpm/ramalama.spec
   ramalama-centos:
-    downstream_package_name: python-ramalama
-    specfile_path: rpm/python-ramalama.spec
+    downstream_package_name: ramalama
+    specfile_path: rpm/ramalama.spec
 
 srpm_build_deps:
   - make
@@ -79,7 +79,7 @@ jobs:
     dist_git_branches: &fedora_targets
       - fedora-all
       - epel10
-      - epel9
+      - epel10.0
 
   - job: koji_build
     trigger: commit
@@ -92,4 +92,4 @@ jobs:
     dist_git_branches:
       - fedora-branched # rawhide updates are created automatically
       - epel10
-      - epel9
+      - epel10.0

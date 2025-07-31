@@ -1,6 +1,5 @@
 import argparse
 import errno
-import glob
 import json
 import os
 import shlex
@@ -9,6 +8,9 @@ import sys
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import get_args
+
+from ramalama.config import COLOR_OPTIONS, SUPPORTED_RUNTIMES
 
 # if autocomplete doesn't exist, just do nothing, don't break
 try:
@@ -21,15 +23,16 @@ except Exception:
 
 import ramalama.chat as chat
 import ramalama.oci
-import ramalama.rag
 from ramalama import engine
 from ramalama.chat import default_prefix
 from ramalama.common import accel_image, get_accel, perror
-from ramalama.config import CONFIG
+from ramalama.config import CONFIG, coerce_to_bool
 from ramalama.logger import configure_logger, logger
-from ramalama.model import MODEL_TYPES
+from ramalama.model import MODEL_TYPES, trim_model_name
 from ramalama.model_factory import ModelFactory, New
-from ramalama.model_store import GlobalModelStore
+from ramalama.model_inspect.error import ParseError
+from ramalama.model_store.global_store import GlobalModelStore
+from ramalama.rag import rag_image
 from ramalama.shortnames import Shortnames
 from ramalama.stack import Stack
 from ramalama.version import print_version, version
@@ -80,6 +83,11 @@ class OverrideDefaultAction(argparse.Action):
         setattr(namespace, self.dest + '_override', True)
 
 
+class CoerceToBool(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, coerce_to_bool(values))
+
+
 class HelpException(Exception):
     pass
 
@@ -116,11 +124,20 @@ class ArgumentParserWithDefaults(argparse.ArgumentParser):
         return action
 
 
-def init_cli():
-    """Initialize the RamaLama CLI and parse command line arguments."""
+def get_parser():
     description = get_description()
     parser = create_argument_parser(description)
     configure_subcommands(parser)
+    return parser
+
+
+def init_cli():
+    """Initialize the RamaLama CLI and parse command line arguments."""
+    # Need to know if we're running with --dryrun or --generate before adding the subcommands,
+    # otherwise calls to accel_image() when setting option defaults will cause unnecessary image pulls.
+    if any(arg in ("--dryrun", "--dry-run", "--generate") or arg.startswith("--generate=") for arg in sys.argv[1:]):
+        CONFIG.dryrun = True
+    parser = get_parser()
     args = parse_arguments(parser)
     post_parse_setup(args)
     return parser, args
@@ -148,6 +165,10 @@ with software on the local system.
 """
 
 
+def abspath(astring) -> str:
+    return os.path.abspath(astring)
+
+
 def create_argument_parser(description: str):
     """Create and configure the argument parser for the CLI."""
     parser = ArgumentParserWithDefaults(
@@ -167,8 +188,7 @@ def configure_arguments(parser):
         dest="container",
         default=CONFIG.container,
         action="store_true",
-        help="""run RamaLama in the default container.
-The RAMALAMA_IN_CONTAINER environment variable modifies default behaviour.""",
+        help=argparse.SUPPRESS,
     )
     verbosity_group.add_argument(
         "--debug",
@@ -190,24 +210,9 @@ The RAMALAMA_IN_CONTAINER environment variable modifies default behaviour.""",
 The RAMALAMA_CONTAINER_ENGINE environment variable modifies default behaviour.""",
     )
     parser.add_argument(
-        "--image",
-        default=accel_image(CONFIG, pull=False),
-        help="OCI container image to run with the specified AI model",
-        action=OverrideDefaultAction,
-        completer=local_images,
-    )
-    parser.add_argument(
-        "--keep-groups",
-        dest="podman_keep_groups",
-        default=CONFIG.keep_groups,
-        action="store_true",
-        help="""pass `--group-add keep-groups` to podman, if using podman.
-Needed to access gpu on some systems, but has security implications.""",
-    )
-    parser.add_argument(
         "--nocontainer",
         dest="container",
-        default=CONFIG.nocontainer,
+        default=not CONFIG.container,
         action="store_false",
         help="""do not run RamaLama in the default container.
 The RAMALAMA_IN_CONTAINER environment variable modifies default behaviour.""",
@@ -216,12 +221,13 @@ The RAMALAMA_IN_CONTAINER environment variable modifies default behaviour.""",
     parser.add_argument(
         "--runtime",
         default=CONFIG.runtime,
-        choices=["llama.cpp", "vllm"],
-        help="specify the runtime to use; valid options are 'llama.cpp' and 'vllm'",
+        choices=get_args(SUPPORTED_RUNTIMES),
+        help="specify the runtime to use; valid options are 'llama.cpp', 'vllm', and 'mlx'",
     )
     parser.add_argument(
         "--store",
         default=CONFIG.store,
+        type=abspath,
         help="store AI Models in the specified directory",
     )
     parser.add_argument(
@@ -262,13 +268,26 @@ def parse_arguments(parser):
 
 def post_parse_setup(args):
     """Perform additional setup after parsing arguments."""
-    if getattr(args, "MODEL", None) and args.subcommand != "rm":
-        resolved_model = shortnames.resolve(args.MODEL)
-        if resolved_model:
-            args.UNRESOLVED_MODEL = args.MODEL
-            args.MODEL = resolved_model
+    if getattr(args, "MODEL", None):
+        if args.subcommand != "rm":
+            resolved_model = shortnames.resolve(args.MODEL)
+            if resolved_model:
+                args.UNRESOLVED_MODEL = args.MODEL
+                args.MODEL = resolved_model
+
+        # TODO: This is a hack. Once we have more typing in place these special cases
+        # _should_ be removed.
+        if not hasattr(args, "model"):
+            args.model = args.MODEL
+
     if hasattr(args, "runtime_args"):
         args.runtime_args = shlex.split(args.runtime_args)
+
+    # MLX runtime automatically requires --nocontainer
+    if getattr(args, "runtime", None) == "mlx":
+        if getattr(args, "container", None) is True:
+            logger.info("MLX runtime automatically uses --nocontainer mode")
+        args.container = False
 
     configure_logger("DEBUG" if args.debug else "WARNING")
 
@@ -371,7 +390,7 @@ def list_files_by_modification(args):
         if os.path.exists(path):
             models.append(path)
         else:
-            print(f"Broken symlink found in: {args.store}/models/{path} \nAttempting removal")
+            perror(f"Broken symlink found in: {args.store}/models/{path} \nAttempting removal")
             New(str(path).replace("/", "://", 1), args).remove(args)
 
     return sorted(models, key=lambda p: os.path.getmtime(p), reverse=True)
@@ -477,12 +496,7 @@ def _list_models_from_store(args):
         if not args.all and is_partially_downloaded:
             continue
 
-        if model.startswith("huggingface://"):
-            model = model.replace("huggingface://", "hf://", 1)
-
-        if not model.startswith("ollama://") and not model.startswith("oci://"):
-            model = model.removesuffix(":latest")
-
+        model = trim_model_name(model)
         size_sum = 0
         last_modified = 0.0
         for file in files:
@@ -509,8 +523,9 @@ def info_cli(args):
         "Engine": {
             "Name": args.engine,
         },
-        "Image": args.image,
+        "Image": accel_image(CONFIG),
         "Runtime": args.runtime,
+        "Selinux": CONFIG.selinux,
         "Store": args.store,
         "UseContainer": args.container,
         "Version": version(),
@@ -587,11 +602,7 @@ def pull_parser(subparsers):
 
 def pull_cli(args):
     model = New(args.MODEL, args)
-    matching_files = glob.glob(f"{args.store}/models/*/{model}")
-    if matching_files:
-        return matching_files[0]
-
-    return model.pull(args)
+    model.pull(args)
 
 
 def convert_parser(subparsers):
@@ -651,6 +662,7 @@ def convert_cli(args):
     model = ModelFactory(tgt, args).create_oci()
 
     source_model = _get_source_model(args)
+    args.carimage = rag_image(accel_image(CONFIG))
     model.convert(source_model, args)
 
 
@@ -695,7 +707,7 @@ def _get_source_model(args):
     smodel = New(src, args)
     if smodel.type == "OCI":
         raise ValueError(f"converting from an OCI based image {src} is not supported")
-    if not smodel.exists(args):
+    if not smodel.exists() and not args.dryrun:
         smodel.pull(args)
     return smodel
 
@@ -778,13 +790,27 @@ def runtime_options(parser, command):
             help="IP address to listen",
             completer=suppressCompleter,
         )
+    parser.add_argument(
+        "--image",
+        default=accel_image(CONFIG),
+        help="OCI container image to run with the specified AI model",
+        action=OverrideDefaultAction,
+        completer=local_images,
+    )
+    parser.add_argument(
+        "--keep-groups",
+        dest="podman_keep_groups",
+        default=CONFIG.keep_groups,
+        action="store_true",
+        help="""pass `--group-add keep-groups` to podman.
+If GPU device on host is accessible to via group access, this option leaks the user groups into the container.""",
+    )
     if command == "run":
         parser.add_argument(
             "--keepalive", type=str, help="duration to keep a model loaded (e.g. 5m)", completer=suppressCompleter
         )
     if command == "serve":
         parser.add_argument("--model-draft", help="Draft model", completer=local_models)
-
     parser.add_argument(
         "-n",
         "--name",
@@ -826,7 +852,7 @@ def runtime_options(parser, command):
         choices=["always", "missing", "never", "newer"],
         help='pull image policy',
     )
-    if command in ["run", "serve"]:
+    if command in ["serve"]:
         parser.add_argument(
             "--rag", help="RAG vector database or OCI Image to be served with the model", completer=local_models
         )
@@ -840,6 +866,12 @@ def runtime_options(parser, command):
             completer=suppressCompleter,
         )
     parser.add_argument("--seed", help="override random seed", completer=suppressCompleter)
+    parser.add_argument(
+        "--selinux",
+        default=CONFIG.selinux,
+        action=CoerceToBool,
+        help="Enable SELinux container separation",
+    )
     parser.add_argument(
         "--temp",
         default=CONFIG.temp,
@@ -889,6 +921,18 @@ def default_threads():
     return CONFIG.threads
 
 
+def chat_run_options(parser):
+    parser.add_argument(
+        '--color',
+        '--colour',
+        default="auto",
+        choices=get_args(COLOR_OPTIONS),
+        help='possible values are "never", "always" and "auto".',
+    )
+    parser.add_argument("--prefix", type=str, help="prefix for the user prompt", default=default_prefix())
+    parser.add_argument("--rag", type=str, help="a file or directory to use as context for the chat")
+
+
 def chat_parser(subparsers):
     parser = subparsers.add_parser("chat", help="OpenAI chat with the specified RESTAPI URL")
     parser.add_argument(
@@ -897,17 +941,15 @@ def chat_parser(subparsers):
         default=os.getenv("API_KEY"),
         help="OpenAI-compatible API key. Can also be set via the API_KEY environment variable.",
     )
+    chat_run_options(parser)
     parser.add_argument(
-        '--color',
-        '--colour',
-        default="auto",
-        choices=['never', 'always', 'auto'],
-        help='possible values are "never", "always" and "auto".',
+        "--list",
+        "--ls",
+        action="store_true",
+        help="list the available models at an endpoint",
     )
-    parser.add_argument("--prefix", type=str, help="prefix for the user prompt", default=default_prefix())
-    parser.add_argument("--rag", type=str, help="a file or directory to use as context for the chat")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8080/v1", help="the url to send requests to")
-    parser.add_argument("MODEL", completer=local_models)  # positional argument
+    parser.add_argument("--model", "-m", type=str, completer=local_models, help="model for inferencing")
     parser.add_argument(
         "ARGS", nargs="*", help="overrides the default prompt, and the output is returned without entering the chatbot"
     )
@@ -917,14 +959,7 @@ def chat_parser(subparsers):
 def run_parser(subparsers):
     parser = subparsers.add_parser("run", help="run specified AI Model as a chatbot")
     runtime_options(parser, "run")
-    parser.add_argument(
-        '--color',
-        '--colour',
-        default="auto",
-        choices=['never', 'always', 'auto'],
-        help='possible values are "never", "always" and "auto".',
-    )
-    parser.add_argument("--prefix", type=str, help="prefix for the user prompt", default=default_prefix())
+    chat_run_options(parser)
     parser.add_argument("MODEL", completer=local_models)  # positional argument
 
     parser.add_argument(
@@ -944,7 +979,7 @@ def run_cli(args):
         args.port = CONFIG.port
         args.host = CONFIG.host
         args.network = 'bridge'
-        args.generate = ParsedGenerateInput("", "")
+        args.generate = None
 
     try:
         model = New(args.MODEL, args)
@@ -970,8 +1005,10 @@ def serve_parser(subparsers):
 def _get_rag(args):
     if os.path.exists(args.rag):
         return
+    if args.pull == "never" or args.dryrun:
+        return
     model = New(args.rag, args=args, transport="oci")
-    if not model.exists(args):
+    if not model.exists():
         model.pull(args)
 
 
@@ -1043,6 +1080,27 @@ def rag_parser(subparsers):
         help="environment variables to add to the running RAG container",
         completer=local_env,
     )
+    parser.add_argument(
+        "--format",
+        default=CONFIG.rag_format,
+        help="Output format for RAG Data",
+        choices=["qdrant", "json", "markdown", "milvus"],
+    )
+    parser.add_argument(
+        "--image",
+        default=accel_image(CONFIG),
+        help="OCI container image to run with the specified AI model",
+        action=OverrideDefaultAction,
+        completer=local_images,
+    )
+    parser.add_argument(
+        "--keep-groups",
+        dest="podman_keep_groups",
+        default=CONFIG.keep_groups,
+        action="store_true",
+        help="""pass `--group-add keep-groups` to podman.
+If GPU device on host is accessible to via group access, this option leaks the user groups into the container.""",
+    )
     add_network_argument(parser, dflt=None)
     parser.add_argument(
         "--pull",
@@ -1053,13 +1111,21 @@ def rag_parser(subparsers):
         help='pull image policy',
     )
     parser.add_argument(
+        "--selinux",
+        default=CONFIG.selinux,
+        action=CoerceToBool,
+        help="Enable SELinux container separation",
+    )
+    parser.add_argument(
         "PATH",
         nargs="*",
         help="""\
 Files/Directory containing PDF, DOCX, PPTX, XLSX, HTML, AsciiDoc & Markdown
 formatted files to be processed""",
     )
-    parser.add_argument("IMAGE", help="OCI Image name to contain processed rag data", completer=suppressCompleter)
+    parser.add_argument(
+        "DESTINATION", help="Path or OCI Image name to contain processed rag data", completer=suppressCompleter
+    )
     parser.add_argument(
         "--ocr",
         dest="ocr",
@@ -1071,7 +1137,7 @@ formatted files to be processed""",
 
 
 def rag_cli(args):
-    rag = ramalama.rag.Rag(args.IMAGE)
+    rag = ramalama.rag.Rag(args.DESTINATION)
     rag.generate(args)
 
 
@@ -1160,30 +1226,30 @@ def inspect_cli(args):
 
 
 def main():
-    parser, args = init_cli()
-
-    try:
-        import argcomplete
-
-        argcomplete.autocomplete(parser)
-    except Exception:
-        pass
 
     def eprint(e, exit_code):
         perror("Error: " + str(e).strip("'\""))
         sys.exit(exit_code)
 
     try:
+        parser, args = init_cli()
+        try:
+            import argcomplete
+
+            argcomplete.autocomplete(parser)
+        except Exception:
+            pass
+
+        if not args.subcommand:
+            parser.print_usage()
+            perror("ramalama: requires a subcommand")
+            return 0
+
         args.func(args)
     except urllib.error.HTTPError as e:
         eprint(f"pulling {e.geturl()} failed: {e}", errno.EINVAL)
     except HelpException:
         parser.print_help()
-    except AttributeError as e:
-        parser.print_usage()
-        perror("ramalama: requires a subcommand")
-        if getattr(args, "debug", False):
-            raise e
     except IndexError as e:
         eprint(e, errno.EINVAL)
     except KeyError as e:
@@ -1200,3 +1266,5 @@ def main():
         eprint(e, errno.EINVAL)
     except IOError as e:
         eprint(e, errno.EIO)
+    except ParseError as e:
+        eprint(f"Failed to parse model: {e}", errno.EINVAL)

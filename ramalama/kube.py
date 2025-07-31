@@ -1,4 +1,5 @@
 import os
+from typing import Optional, Tuple
 
 from ramalama.common import MNT_DIR, RAG_DIR, genname, get_accel_env_vars
 from ramalama.file import PlainFile
@@ -6,33 +7,48 @@ from ramalama.version import version
 
 
 class Kube:
-    def __init__(self, model, chat_template, args, exec_args):
-        self.ai_image = getattr(args, "MODEL", model)
-        self.ai_image = self.ai_image.removeprefix("oci://")
+    def __init__(
+        self,
+        model_name: str,
+        model_paths: Tuple[str, str],
+        chat_template_paths: Optional[Tuple[str, str]],
+        mmproj_paths: Optional[Tuple[str, str]],
+        args,
+        exec_args,
+    ):
+        self.src_model_path, self.dest_model_path = model_paths
+        self.src_chat_template_path, self.dest_chat_template_path = (
+            chat_template_paths if chat_template_paths is not None else ("", "")
+        )
+        self.src_mmproj_path, self.dest_mmproj_path = mmproj_paths if mmproj_paths is not None else ("", "")
+        self.src_model_path = self.src_model_path.removeprefix("oci://")
+
+        self.ai_image = model_name
         if getattr(args, "name", None):
             self.name = args.name
         else:
             self.name = genname()
 
-        self.model = model.removeprefix("oci://")
         self.args = args
         self.exec_args = exec_args
         self.image = args.image
-        self.chat_template = chat_template
 
     def _gen_volumes(self):
-        mounts = f"""\
-        volumeMounts:
-        - mountPath: {MNT_DIR}
-          subPath: /models
-          name: model"""
+        mounts = """\
+        volumeMounts:"""
 
         volumes = """
       volumes:"""
 
-        if os.path.exists(self.model):
-            volumes += self._gen_path_volume()
+        if os.path.exists(self.src_model_path):
+            m, v = self._gen_path_volume()
+            mounts += m
+            volumes += v
         else:
+            mounts += f"""
+        - mountPath: {MNT_DIR}
+          subPath: /models
+          name: model"""
             volumes += self._gen_oci_volume()
 
         if self.args.rag:
@@ -40,8 +56,15 @@ class Kube:
             mounts += m
             volumes += v
 
-        if os.path.exists(self.chat_template):
-            volumes += self._gen_chat_template_volume()
+        if self.src_chat_template_path and os.path.exists(self.src_chat_template_path):
+            m, v = self._gen_chat_template_volume()
+            mounts += m
+            volumes += v
+
+        if self.src_mmproj_path and os.path.exists(self.src_mmproj_path):
+            m, v = self._gen_mmproj_volume()
+            mounts += m
+            volumes += v
 
         m, v = self._gen_devices()
         mounts += m
@@ -63,10 +86,14 @@ class Kube:
         return mounts, volumes
 
     def _gen_path_volume(self):
-        return f"""
+        mount = f"""
+        - mountPath: {self.dest_model_path}
+          name: model"""
+        volume = f"""
       - hostPath:
-          path: {self.model}
+          path: {self.src_model_path}
         name: model"""
+        return mount, volume
 
     def _gen_oci_volume(self):
         return f"""
@@ -89,10 +116,24 @@ class Kube:
         return mounts, volumes
 
     def _gen_chat_template_volume(self):
-        return f"""
+        mount = f"""
+        - mountPath: {self.dest_chat_template_path}
+          name: chat_template"""
+        volume = f"""
       - hostPath:
-          path: {self.chat_template}
+          path: {self.src_chat_template_path}
         name: chat_template"""
+        return mount, volume
+
+    def _gen_mmproj_volume(self):
+        mount = f"""
+        - mountPath: {self.dest_mmproj_path}
+          name: mmproj"""
+        volume = f"""
+      - hostPath:
+          path: {self.src_mmproj_path}
+        name: mmproj"""
+        return mount, volume
 
     def __gen_ports(self):
         if not hasattr(self.args, "port"):
@@ -159,7 +200,8 @@ spec:
         args: {self.exec_args[1:]}
 {env_string}
 {port_string}
-{volume_string}"""
+{volume_string}
+"""
 
         return genfile(self.name, content)
 

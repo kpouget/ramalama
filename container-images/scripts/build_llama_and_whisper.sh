@@ -1,12 +1,13 @@
 #!/bin/bash
 
 python_version() {
+  local pyversion
   pyversion=$(python3 --version)
   # $2 is empty when no Python is installed, so just install python3
   if [ -n "$pyversion" ]; then
-    string="$pyversion
+    local pystr="$pyversion
 Python 3.10"
-    if [ "$string" == "$(sort --version-sort <<<"$string")" ]; then
+    if [ "$pystr" == "$(sort --version-sort <<<"$pystr")" ]; then
       echo "python3.11"
       return
     fi
@@ -105,9 +106,12 @@ is_rhel_based() { # doesn't include openEuler
 dnf_install_mesa() {
   if [ "${ID}" = "fedora" ]; then
     dnf copr enable -y slp/mesa-libkrun-vulkan
-    dnf install -y mesa-vulkan-drivers-25.0.7-100.fc42 "${vulkan_rpms[@]}"
+    dnf install -y mesa-vulkan-drivers-25.0.7-100.fc42 virglrenderer \
+      "${vulkan_rpms[@]}"
     dnf versionlock add mesa-vulkan-drivers-25.0.7-100.fc42
-  else
+  elif [ "${ID}" = "openEuler" ]; then
+    dnf install -y mesa-vulkan-drivers virglrenderer "${vulkan_rpms[@]}"
+  else # virglrenderer not available on RHEL or EPEL
     dnf install -y mesa-vulkan-drivers "${vulkan_rpms[@]}"
   fi
 
@@ -131,7 +135,7 @@ dnf_install_ffmpeg() {
     add_stream_repo "CRB"
   fi
 
-  if [[ "${ID}" == "openEuler" ]]; then
+  if [ "${ID}" = "openEuler" ]; then
     dnf install -y ffmpeg
   else
     dnf install -y ffmpeg-free
@@ -313,18 +317,22 @@ clone_and_build_llama_cpp() {
 }
 
 install_ramalama() {
-  $PYTHON -m pip install . --prefix="$1"
+  if [ -e "pyproject.toml" ]; then
+    $PYTHON -m pip install . --prefix="$1"
+  fi
 }
 
 install_entrypoints() {
-  install -d "$install_prefix"/bin
-  install -m 755 \
-    container-images/scripts/llama-server.sh \
-    container-images/scripts/whisper-server.sh \
-    container-images/scripts/build_rag.sh \
-    container-images/scripts/doc2rag \
-    container-images/scripts/rag_framework \
-    "$install_prefix"/bin
+  if [ -e "container-images" ]; then
+    install -d "$install_prefix"/bin
+    install -m 755 \
+      container-images/scripts/llama-server.sh \
+      container-images/scripts/whisper-server.sh \
+      container-images/scripts/build_rag.sh \
+      container-images/scripts/doc2rag \
+      container-images/scripts/rag_framework \
+      "$install_prefix"/bin
+  fi
 }
 
 main() {
@@ -350,7 +358,7 @@ main() {
   install_entrypoints
 
   setup_build_env
-  if [ "$uname_m" != "s390x" ]; then
+  if [ "$uname_m" != "s390x" ] && [ "$containerfile" != "musa" ]; then
     clone_and_build_whisper_cpp
   fi
   common_flags+=("-DLLAMA_CURL=ON")

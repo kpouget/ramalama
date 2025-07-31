@@ -13,14 +13,10 @@ import shutil
 import string
 import subprocess
 import sys
-import time
-import urllib.error
 from functools import lru_cache
 from typing import TYPE_CHECKING, Callable, List, Literal, Protocol, cast, get_args
 
 import ramalama.amdkfd as amdkfd
-import ramalama.console as console
-from ramalama.http_client import HttpClient
 from ramalama.logger import logger
 from ramalama.version import version
 
@@ -37,10 +33,19 @@ MNT_CHAT_TEMPLATE_FILE = f"{MNT_DIR}/chat_template.file"
 RAG_DIR = "/rag"
 RAG_CONTENT = f"{MNT_DIR}/vector.db"
 
-HTTP_NOT_FOUND = 404
-HTTP_RANGE_NOT_SATISFIABLE = 416  # "Range Not Satisfiable" error (file already downloaded)
-
 MIN_VRAM_BYTES = 1073741824  # 1GiB
+
+SPLIT_MODEL_PATH_RE = r'(.*)/([^/]*)-00001-of-(\d{5})\.gguf'
+
+
+def is_split_file_model(model_path):
+    """returns true if ends with -%05d-of-%05d.gguf"""
+    return bool(re.match(SPLIT_MODEL_PATH_RE, model_path))
+
+
+def sanitize_filename(filename: str) -> str:
+    return filename.replace(":", "-")
+
 
 podman_machine_accel = False
 
@@ -64,14 +69,17 @@ def confirm_no_gpu(name, provider) -> bool:
         print("Invalid input. Please enter 'yes' or 'no'.")
 
 
-def handle_provider(machine) -> bool | None:
+def handle_provider(machine, config: Config | None = None) -> bool | None:
     global podman_machine_accel
     name = machine.get("Name")
     provider = machine.get("VMType")
     running = machine.get("Running")
     if running:
         if provider == "applehv":
-            return confirm_no_gpu(name, provider)
+            if config is not None and config.user.no_missing_gpu_prompt:
+                return True
+            else:
+                return confirm_no_gpu(name, provider)
         if "krun" in provider:
             podman_machine_accel = True
             return True
@@ -79,13 +87,13 @@ def handle_provider(machine) -> bool | None:
     return None
 
 
-def apple_vm(engine: SUPPORTED_ENGINES) -> bool:
+def apple_vm(engine: SUPPORTED_ENGINES, config: Config | None = None) -> bool:
     podman_machine_list = [engine, "machine", "list", "--format", "json", "--all-providers"]
     try:
         machines_json = run_cmd(podman_machine_list, ignore_stderr=True).stdout.decode("utf-8").strip()
         machines = json.loads(machines_json)
         for machine in machines:
-            result = handle_provider(machine)
+            result = handle_provider(machine, config)
             if result is not None:
                 return result
     except subprocess.CalledProcessError:
@@ -123,7 +131,7 @@ def exec_cmd(args, stdout2null: bool = False, stderr2null: bool = False):
         raise
 
 
-def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_all=False):
+def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_all=False, encoding=None):
     """
     Run the given command arguments.
 
@@ -133,6 +141,7 @@ def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_
     stdout: standard output configuration
     ignore_stderr: if True, ignore standard error
     ignore_all: if True, ignore both standard output and standard error
+    encoding: encoding to apply to the result text
     """
     logger.debug(f"run_cmd: {quoted(args)}")
     logger.debug(f"Working directory: {cwd}")
@@ -143,11 +152,11 @@ def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_
     if ignore_all or ignore_stderr:
         serr = subprocess.DEVNULL
 
-    sout = subprocess.PIPE
+    sout = stdout
     if ignore_all:
         sout = subprocess.DEVNULL
 
-    result = subprocess.run(args, check=True, cwd=cwd, stdout=sout, stderr=serr)
+    result = subprocess.run(args, check=True, cwd=cwd, stdout=sout, stderr=serr, encoding=encoding)
     logger.debug(f"Command finished with return code: {result.returncode}")
 
     return result
@@ -165,11 +174,11 @@ def generate_sha256(to_hash: str) -> str:
     to_hash (str): The string to generate the sha256 hash for.
 
     Returns:
-    str: Hex digest of the input appended to the prefix sha256:
+    str: Hex digest of the input appended to the prefix sha256-
     """
     h = hashlib.new("sha256")
     h.update(to_hash.encode("utf-8"))
-    return f"sha256:{h.hexdigest()}"
+    return f"sha256-{h.hexdigest()}"
 
 
 def verify_checksum(filename: str) -> bool:
@@ -211,135 +220,82 @@ def verify_checksum(filename: str) -> bool:
     return sha256_hash.hexdigest() == expected_checksum
 
 
-def download_and_verify(url: str, target_path: str, max_retries: int = 2):
-    """
-    Downloads a file from a given URL and verifies its checksum.
-    If the checksum does not match, it retries the download.
-    Args:
-        url (str): The URL to download from.
-        target_path (str): The path to save the downloaded file.
-        max_retries (int): Maximum number of retries for download.
-    Raises:
-        ValueError: If checksum verification fails after multiple attempts.
-    """
-
-    for attempt in range(max_retries):
-        download_file(url, target_path, headers={}, show_progress=True)
-        if verify_checksum(target_path):
-            break
-        console.warning(
-            f"Checksum mismatch for {target_path}, retrying download ... (Attempt {attempt + 1}/{max_retries})"
-        )
-        os.remove(target_path)
-    else:
-        raise ValueError(f"Checksum verification failed for {target_path} after multiple attempts")
-
-
 def genname():
     return "ramalama_" + "".join(random.choices(string.ascii_letters + string.digits, k=10))
 
 
-def download_file(url: str, dest_path: str, headers: dict[str, str] | None = None, show_progress: bool = True):
-    """
-    Downloads a file from a given URL to a specified destination path.
-
-    Args:
-        url (str): The URL to download from.
-        dest_path (str): The path to save the downloaded file.
-        headers (dict): Optional headers to include in the request.
-        show_progress (bool): Whether to show a progress bar during download.
-
-    Raises:
-        RuntimeError: If the download fails after multiple attempts.
-    """
-    headers = headers or {}
-
-    # If not running in a TTY, disable progress to prevent CI pollution
-    if not sys.stdout.isatty():
-        show_progress = False
-
-    http_client = HttpClient()
-    max_retries = 5  # Stop after 5 failures
-    retries = 0
-
-    while retries < max_retries:
-        try:
-            # Initialize HTTP client for the request
-            http_client.init(url=url, headers=headers, output_file=dest_path, show_progress=show_progress)
-            return  # Exit function if successful
-
-        except urllib.error.HTTPError as e:
-            if e.code in [HTTP_RANGE_NOT_SATISFIABLE, HTTP_NOT_FOUND]:
-                raise e
-            retries += 1
-
-        except urllib.error.URLError as e:
-            console.error(f"Network Error: {e.reason}")
-            retries += 1
-
-        except TimeoutError:
-            retries += 1
-            console.warning(f"TimeoutError: The server took too long to respond. Retrying {retries}/{max_retries} ...")
-
-        except RuntimeError as e:  # Catch network-related errors from HttpClient
-            retries += 1
-            console.warning(f"{e}. Retrying {retries}/{max_retries} ...")
-
-        except IOError as e:
-            retries += 1
-            console.warning(f"I/O Error: {e}. Retrying {retries}/{max_retries} ...")
-
-        except Exception as e:
-            console.error(f"Unexpected error: {str(e)}")
-            raise e
-
-        if retries >= max_retries:
-            error_message = (
-                "\nDownload failed after multiple attempts.\n"
-                "Possible causes:\n"
-                "- Internet connection issue\n"
-                "- Server is down or unresponsive\n"
-                "- Firewall or proxy blocking the request\n"
-            )
-            raise ConnectionError(error_message)
-
-        time.sleep(2**retries * 0.1)  # Exponential backoff (0.1s, 0.2s, 0.4s...)
-
-
 def engine_version(engine: SUPPORTED_ENGINES) -> str:
     # Create manifest list for target with imageid
-    cmd_args = [engine, "version", "--format", "{{ .Client.Version }}"]
+    cmd_args = [str(engine), "version", "--format", "{{ .Client.Version }}"]
     return run_cmd(cmd_args).stdout.decode("utf-8").strip()
 
 
-def resolve_cdi(spec_dirs: List[str]):
-    """Loads all CDI specs from the given directories."""
-    for spec_dir in spec_dirs:
-        for root, _, files in os.walk(spec_dir):
-            for file in files:
-                if file.endswith('.json') or file.endswith('.yaml'):
-                    if load_spec(os.path.join(root, file)):
-                        return True
+def load_cdi_yaml(stream) -> dict:
+    # Returns a dict containing just the "devices" key, whose value is
+    # a list of dicts, each mapping the key "name" to a device name.
+    # For example: {'devices': [{'name': 'all'}]}
+    # This depends on the key "name" being unique to the list of dicts
+    # under "devices" and the value of the "name" key being on the
+    # same line following a colon.
 
-    return False
-
-
-def yaml_safe_load(stream) -> dict:
-    data = {}
+    data = {"devices": []}
     for line in stream:
         if ':' in line:
             key, value = line.split(':', 1)
-            data[key.strip()] = value.strip()
-
+            if key.strip() == "name":
+                data['devices'].append({'name': value.strip().strip('"')})
     return data
 
 
-def load_spec(path: str):
-    """Loads a single CDI spec file."""
-    with open(path, 'r') as f:
-        spec = json.load(f) if path.endswith('.json') else yaml_safe_load(f)
+def load_cdi_config(spec_dirs: List[str]) -> dict | None:
+    # Loads the first YAML or JSON CDI configuration file found in the
+    # given directories."""
 
-    return spec.get('kind')
+    for spec_dir in spec_dirs:
+        for root, _, files in os.walk(spec_dir):
+            for file in files:
+                _, ext = os.path.splitext(file)
+                file_path = os.path.join(root, file)
+                if ext in [".yaml", ".yml"]:
+                    try:
+                        with open(file_path, "r") as stream:
+                            return load_cdi_yaml(stream)
+                    except OSError:
+                        continue
+                elif ext == ".json":
+                    try:
+                        with open(file_path, "r") as stream:
+                            return json.load(stream)
+                    except json.JSONDecodeError:
+                        continue
+                    except UnicodeDecodeError:
+                        continue
+                    except OSError:
+                        continue
+    return None
+
+
+def find_in_cdi(devices: List[str]) -> tuple[List[str], List[str]]:
+    # Attempts to find a CDI configuration for each device in devices
+    # and returns a list of configured devices and a list of
+    # unconfigured devices.
+    cdi = load_cdi_config(['/etc/cdi', '/var/run/cdi'])
+    cdi_devices = cdi.get("devices", []) if cdi else []
+    cdi_device_names = [name for cdi_device in cdi_devices if (name := cdi_device.get("name"))]
+
+    configured = []
+    unconfigured = []
+    for device in devices:
+        if device in cdi_device_names:
+            configured.append(device)
+        # A device can be specified by a prefix of the uuid
+        elif device.startswith("GPU") and any(name.startswith(device) for name in cdi_device_names):
+            configured.append(device)
+        else:
+            perror(f"Device {device} does not have a CDI configuration")
+            unconfigured.append(device)
+
+    return configured, unconfigured
 
 
 def check_asahi() -> Literal["asahi"] | None:
@@ -365,27 +321,41 @@ def check_metal(args: ContainerArgType) -> bool:
 @lru_cache(maxsize=1)
 def check_nvidia() -> Literal["cuda"] | None:
     try:
-        command = ['nvidia-smi']
-        run_cmd(command).stdout.decode("utf-8")
+        command = ['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader']
+        result = run_cmd(command, encoding="utf-8")
+    except OSError:
+        return None
 
-        # ensure at least one CDI device resolves
-        if resolve_cdi(['/etc/cdi', '/var/run/cdi']):
-            if "CUDA_VISIBLE_DEVICES" not in os.environ:
-                dev_command = ['nvidia-smi', '--query-gpu=index', '--format=csv,noheader']
-                try:
-                    result = run_cmd(dev_command)
-                    output = result.stdout.decode("utf-8").strip()
-                    if not output:
-                        raise ValueError("nvidia-smi returned empty GPU indices")
-                    devices = ','.join(output.split('\n'))
-                except Exception:
-                    devices = "0"
+    smi_lines = result.stdout.splitlines()
+    parsed_lines = [[item.strip() for item in line.split(',')] for line in smi_lines if line]
+    if not parsed_lines:
+        return None
 
-                os.environ["CUDA_VISIBLE_DEVICES"] = devices
+    indices, uuids = zip(*parsed_lines) if parsed_lines else (tuple(), tuple())
+    # Get the list of devices specified by CUDA_VISIBLE_DEVICES, if any
+    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    visible_devices = cuda_visible_devices.split(',') if cuda_visible_devices else []
+    for device in visible_devices:
+        if device not in indices and not any(uuid.startswith(device) for uuid in uuids):
+            perror(f"{device} not found")
+            return None
 
-            return "cuda"
-    except Exception:
-        pass
+    configured, unconfigured = find_in_cdi(visible_devices + ["all"])
+
+    if unconfigured and "all" not in configured:
+        perror(f"No CDI configuration found for {','.join(unconfigured)}")
+        perror("You can use the \"nvidia-ctk cdi generate\" command from the ")
+        perror("nvidia-container-toolkit to generate a CDI configuration.")
+        perror("See ramalama-cuda(7).")
+        return None
+    elif configured:
+        if "all" in configured:
+            configured.remove("all")
+            if not configured:
+                configured = indices
+
+        os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(configured)
+        return "cuda"
 
     return None
 
@@ -437,6 +407,9 @@ def check_intel() -> Literal["intel"] | None:
     intel_gpus = (
         b"0xe20b",
         b"0xe20c",
+        b"0x46a6",
+        b"0x46a8",
+        b"0x46aa",
         b"0x56a0",
         b"0x56a1",
         b"0x7d51",
@@ -524,7 +497,9 @@ AccelEnvVar = Literal[
 
 
 def get_accel_env_vars() -> dict[GPUEnvVar | AccelEnvVar, str]:
-    return get_gpu_type_env_vars() | {k: os.environ[k] for k in get_args(AccelEnvVar) if k in os.environ}
+    gpu_env_vars: dict[GPUEnvVar, str] = get_gpu_type_env_vars()
+    accel_env_vars: dict[AccelEnvVar, str] = {k: os.environ[k] for k in get_args(AccelEnvVar) if k in os.environ}
+    return gpu_env_vars | accel_env_vars
 
 
 def rm_until_substring(input: str, substring: str) -> str:
@@ -627,7 +602,7 @@ class AccelImageArgsOtherRuntimeRAG(Protocol):
 AccelImageArgs = None | AccelImageArgsVLLMRuntime | AccelImageArgsOtherRuntime | AccelImageArgsOtherRuntimeRAG
 
 
-def accel_image(config: Config, pull=True) -> str:
+def accel_image(config: Config) -> str:
     """
     Selects and the appropriate image based on config, arguments, environment.
     """
@@ -650,13 +625,15 @@ def accel_image(config: Config, pull=True) -> str:
         return "registry.redhat.io/rhelai1/ramalama-vllm"
 
     vers = minor_release()
-    if not pull or attempt_to_use_versioned(config.engine, image, vers, True):
+
+    should_pull = config.pull in ["always", "missing"] and not config.dryrun
+    if attempt_to_use_versioned(config.engine, image, vers, True, should_pull):
         return f"{image}:{vers}"
 
     return f"{image}:latest"
 
 
-def attempt_to_use_versioned(conman: str, image: str, vers: str, quiet: bool) -> bool:
+def attempt_to_use_versioned(conman: str, image: str, vers: str, quiet: bool, should_pull: bool) -> bool:
     try:
         # check if versioned image exists locally
         if run_cmd([conman, "inspect", f"{image}:{vers}"], ignore_all=True):
@@ -665,10 +642,13 @@ def attempt_to_use_versioned(conman: str, image: str, vers: str, quiet: bool) ->
     except Exception:
         pass
 
+    if not should_pull:
+        return False
+
     try:
         # attempt to pull the versioned image
         if not quiet:
-            print(f"Attempting to pull {image}:{vers} ...")
+            perror(f"Attempting to pull {image}:{vers} ...")
         run_cmd([conman, "pull", f"{image}:{vers}"], ignore_stderr=True)
         return True
 

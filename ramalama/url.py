@@ -1,10 +1,11 @@
 import os
+import re
 import shutil
 
-from ramalama.common import generate_sha256
+from ramalama.common import SPLIT_MODEL_PATH_RE, generate_sha256, is_split_file_model
 from ramalama.huggingface import HuggingfaceRepository
 from ramalama.model import Model
-from ramalama.model_store import SnapshotFile, SnapshotFileType
+from ramalama.model_store.snapshot_file import SnapshotFile, SnapshotFileType
 from ramalama.modelscope import ModelScopeRepository
 
 
@@ -74,11 +75,40 @@ class URL(Model):
 
         return model_name, model_tag, model_organization
 
-    def pull(self, args):
+    def _assemble_split_file_list(self, snapshot_hash: str) -> list[SnapshotFile]:
+        files: list[SnapshotFile] = []
+
+        # model is split, lets fetch all files based on the name pattern
+        match = re.match(SPLIT_MODEL_PATH_RE, self.model)
+        if match is None:
+            return files
+
+        path_part = match[1]
+        filename_base = match[2]
+        total_parts = int(match[3])
+
+        for i in range(1, total_parts + 1):
+            file_name = f"{filename_base}-{i:05d}-of-{total_parts:05d}.gguf"
+            url = f"{self.type}://{path_part}/{file_name}"
+            files.append(
+                SnapshotFile(
+                    url=url,
+                    header={},
+                    hash=snapshot_hash,
+                    type=SnapshotFileType.Model,
+                    name=file_name,
+                    should_show_progress=True,
+                    required=True,
+                )
+            )
+
+        return files
+
+    def pull(self, _):
         name, tag, _ = self.extract_model_identifiers()
-        model_file_hash, _, all_files = self.model_store.get_cached_files(tag)
+        _, _, all_files = self.model_store.get_cached_files(tag)
         if all_files:
-            return self.model_store.get_snapshot_file_path(model_file_hash, name)
+            return
 
         files: list[SnapshotFile] = []
         snapshot_hash = generate_sha256(name)
@@ -92,19 +122,24 @@ class URL(Model):
                     required=True,
                 )
             )
-        else:
-            files.append(
-                SnapshotFile(
-                    url=f"{self.type}://{self.model}",
-                    header={},
-                    hash=snapshot_hash,
-                    type=SnapshotFileType.Model,
-                    name=name,
-                    should_show_progress=True,
-                    required=True,
-                )
+            self.model_store.new_snapshot(tag, snapshot_hash, files)
+            return
+
+        if is_split_file_model(self.model):
+            files = self._assemble_split_file_list(snapshot_hash)
+            self.model_store.new_snapshot(tag, snapshot_hash, files)
+            return
+
+        files.append(
+            SnapshotFile(
+                url=f"{self.type}://{self.model}",
+                header={},
+                hash=snapshot_hash,
+                type=SnapshotFileType.Model,
+                name=name,
+                should_show_progress=True,
+                required=True,
             )
-
+        )
         self.model_store.new_snapshot(tag, snapshot_hash, files)
-
-        return self.model_store.get_snapshot_file_path(snapshot_hash, name)
+        return
