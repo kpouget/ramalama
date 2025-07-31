@@ -21,7 +21,7 @@ load setup_suite
     RAMALAMA_TRANSPORT=ollama run_ramalama pull smollm:360m
     run_ramalama pull ollama://smollm:360m
     run_ramalama list
-    is "$output" ".*ollama://smollm/smollm:360m" "image was actually pulled locally"
+    is "$output" ".*ollama://library/smollm:360m" "image was actually pulled locally"
     run_ramalama rm ollama://smollm:135m ollama://smollm:360m
 
     random_image_name=i_$(safename)
@@ -49,7 +49,7 @@ load setup_suite
     RAMALAMA_TRANSPORT=ollama run_ramalama pull smollm:360m
     run_ramalama pull ollama://smollm:360m
     run_ramalama list
-    is "$output" ".*ollama://smollm/smollm:360m" "image was actually pulled locally from ollama cache"
+    is "$output" ".*ollama://library/smollm:360m" "image was actually pulled locally from ollama cache"
     run_ramalama rm https://ollama.com/library/smollm:135m ollama://smollm:360m
     ollama rm smollm:135m smollm:360m
 
@@ -82,6 +82,31 @@ load setup_suite
     run_ramalama list
     is "$output" ".*TinyLlama/TinyLlama-1.1B-Chat-v1.0" "image was actually pulled locally"
     run_ramalama rm huggingface://TinyLlama/TinyLlama-1.1B-Chat-v1.0
+
+    run_ramalama pull hf://ggml-org/SmolVLM-256M-Instruct-GGUF
+    run_ramalama list
+    is "$output" ".*ggml-org/SmolVLM-256M-Instruct-GGUF" "image was actually pulled locally"
+    run_ramalama rm huggingface://ggml-org/SmolVLM-256M-Instruct-GGUF
+
+    run_ramalama pull hf://ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0
+    run_ramalama list
+    is "$output" ".*ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0" "image was actually pulled locally"
+    run_ramalama rm huggingface://ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0
+}
+
+# bats test_tags=distro-integration
+@test "ramalama pull huggingface tag multiple references" {
+    run_ramalama pull hf://ggml-org/SmolVLM-256M-Instruct-GGUF
+    run_ramalama list
+    is "$output" ".*ggml-org/SmolVLM-256M-Instruct-GGUF" "image was actually pulled locally"
+    run_ramalama --debug pull hf://ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0
+    is "$output" ".*Using cached blob" "cached blob was used"
+    run_ramalama list
+    is "$output" ".*ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0" "reference was created to existing image"
+    run_ramalama --debug rm huggingface://ggml-org/SmolVLM-256M-Instruct-GGUF
+    is "$output" ".*Not removing snapshot" "snapshot with remaining reference was not deleted"
+    run_ramalama --debug rm huggingface://ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0
+    is "$output" ".*Snapshot removed" "snapshot with no remaining references was deleted"
 }
 
 # bats test_tags=distro-integration

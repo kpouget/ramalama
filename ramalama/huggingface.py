@@ -11,11 +11,11 @@ from ramalama.hf_style_repo_base import (
     fetch_checksum_from_api_base,
 )
 from ramalama.logger import logger
-from ramalama.model_store import SnapshotFileType
+from ramalama.model_store.snapshot_file import SnapshotFileType
 
 missing_huggingface = """
 Optional: Huggingface models require the huggingface-cli module.
-This module can be installed via PyPi tools like uv, pip, pip3, pipx, or via
+This module can be installed via PyPI tools like uv, pip, pip3, pipx, or via
 distribution package managers like dnf or apt. Example:
 uv pip install huggingface_hub
 """
@@ -130,7 +130,7 @@ def get_repo_info(repo_name):
 
 def handle_repo_info(repo_name, repo_info, runtime):
     if "safetensors" in repo_info and runtime == "llama.cpp":
-        print(
+        perror(
             "\nllama.cpp does not support running safetensor models, "
             "please use a/convert to the GGUF format using:\n"
             f"- https://huggingface.co/models?other=base_model:quantized:{repo_name} \n"

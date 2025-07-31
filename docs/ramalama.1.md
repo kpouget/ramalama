@@ -23,34 +23,13 @@ version of RamaLama. For example RamaLama version 1.2.3 on an NVIDIA system
 pulls quay.io/ramalama/cuda:1.2. To override the default image use the
 `--image` option.
 
-Accelerated images:
-
-| Accelerator             | Image                      |
-| ------------------------| -------------------------- |
-|  CPU, Apple             | quay.io/ramalama/ramalama  |
-|  HIP_VISIBLE_DEVICES    | quay.io/ramalama/rocm      |
-|  CUDA_VISIBLE_DEVICES   | quay.io/ramalama/cuda      |
-|  ASAHI_VISIBLE_DEVICES  | quay.io/ramalama/asahi     |
-|  INTEL_VISIBLE_DEVICES  | quay.io/ramalama/intel-gpu |
-|  ASCEND_VISIBLE_DEVICES | quay.io/ramalama/cann      |
-|  MUSA_VISIBLE_DEVICES   | quay.io/ramalama/musa      |
-
 RamaLama pulls AI Models from model registries. Starting a chatbot or a rest API service from a simple single command. Models are treated similarly to how Podman and Docker treat container images.
 
 When both Podman and Docker are installed, RamaLama defaults to Podman, The `RAMALAMA_CONTAINER_ENGINE=docker` environment variable can override this behaviour. When neither are installed RamaLama attempts to run the model with software on the local system.
 
-Note:
+Note: On MacOS systems that use Podman for containers, configure the Podman machine to use the `libkrun` machine provider. The `libkrun` provider enables containers within the Podman Machine access to the Mac's GPU. See **[ramalama-macos(7)](ramalama-macos.7.md)** for further information.
 
-On MacOS systems that use Podman for containers, configure the Podman machine
-to use the `libkrun` machine provider. The `libkrun` provider enables
-containers within the Podman Machine access to the Mac's GPU.
-See **[ramalama-macos(7)](ramalama-macos.7.md)** for further information.
-
-Note:
-
-On systems with NVIDIA GPUs, see **[ramalama-cuda(7)](ramalama-cuda.7.md)** to correctly configure the host system.
-
-Default settings for flags are defined in **[ramalama.conf(5)](ramalama.conf.5.md)**.
+Note: On systems with NVIDIA GPUs, see **[ramalama-cuda(7)](ramalama-cuda.7.md)** to correctly configure the host system. Default settings for flags are defined in **[ramalama.conf(5)](ramalama.conf.5.md)**.
 
 ## SECURITY
 
@@ -105,7 +84,7 @@ the model. The following table specifies the order which RamaLama reads the file
 | Administrators  | /etc/ramamala/shortnames.conf             |
 | Users           | $HOME/.config/ramalama/shortnames.conf    |
 
-```code
+```toml
 $ cat /usr/share/ramalama/shortnames.conf
 [shortnames]
   "tiny" = "ollama://tinyllama"
@@ -120,10 +99,6 @@ $ cat /usr/share/ramalama/shortnames.conf
 
 ## GLOBAL OPTIONS
 
-#### **--container**
-run RamaLama in the default container. Default is `true` unless overridden in the ramalama.conf file.
-The environment variable "RAMALAMA_IN_CONTAINER=false" can also change the default.
-
 #### **--debug**
 print debug messages
 
@@ -137,26 +112,11 @@ The default can be overridden in the ramalama.conf file or via the RAMALAMA_CONT
 #### **--help**, **-h**
 show this help message and exit
 
-#### **--image**=IMAGE
-OCI container image to run with specified AI model. RamaLama defaults to use
-images based on the accelerator it discovers. For example:
-`quay.io/ramalama/ramalama`. See the table below for all default images.
-The default image tag is based on the minor version of the RamaLama package.
-Version 0.10.0 of RamaLama pulls $IMAGE:0.10 from the quay.io/ramalama OCI repository. The --image option overrides this default.
-
-The default can be overridden in the ramalama.conf file or via the
-RAMALAMA_IMAGE environment variable. `export RAMALAMA_IMAGE=quay.io/ramalama/aiimage:1.2` tells
-RamaLama to use the `quay.io/ramalama/aiimage:1.2` image.
-
-#### **--keep-groups**
-pass --group-add keep-groups to podman (default: False)
-Needed to access the gpu on some systems, but has an impact on security, use with caution.
-
 #### **--nocontainer**
-Do not run RamaLama in the default container (default: False)
+Do not run RamaLama workloads in containers (default: False)
 The default can be overridden in the ramalama.conf file.
 
-Note: OCI images cannot be used with the --nocontainer option. This option disables the following features: GPU acceleration, containerized environment isolation, and dynamic resource allocation. For a complete list of affected features, please see the RamaLama documentation at [link-to-feature-list].
+Note: OCI images cannot be used with the --nocontainer option. This option disables the following features: Automatic GPU acceleration, containerized environment isolation, and dynamic resource allocation. For a complete list of affected features, please see the RamaLama documentation at [link-to-feature-list].
 
 #### **--quiet**
 Decrease output verbosity.

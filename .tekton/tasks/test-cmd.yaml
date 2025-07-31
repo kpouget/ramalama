@@ -1,0 +1,36 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: test-cmd
+spec:
+  description: Run a command in a test environment.
+  params:
+  - name: image
+    description: The image to use when setting up the test environment.
+  - name: cmd
+    description: The command to run.
+  - name: envs
+    description: List of environment variables (NAME=VALUE) to be set in the test environment.
+    type: array
+    default: []
+  steps:
+  - name: run
+    image: $(params.image)
+    computeResources:
+      limits:
+        memory: 4Gi
+      requests:
+        cpu: "1"
+        memory: 1Gi
+    securityContext:
+      capabilities:
+        add:
+        - SETFCAP
+    command:
+    - /usr/bin/entrypoint.sh
+    args:
+    - $(params.envs[*])
+    - /bin/bash
+    - -ex
+    - -c
+    - $(params.cmd)
