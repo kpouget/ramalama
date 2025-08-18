@@ -260,7 +260,6 @@ clone_and_build_whisper_cpp() {
 }
 
 clone_and_build_llama_cpp() {
-  local containerfile=$1
   local llama_cpp_sha="${LLAMA_CPP_PULL_REF:-main}"
   local install_prefix
   install_prefix=$(set_install_prefix)
