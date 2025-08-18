@@ -15,6 +15,12 @@ Python 3.10"
   echo "python3"
 }
 
+dnf_install_remoting() {
+    LIBDRM_VERSION=2.4.123-2.el9.aarch64
+    curl -Ssf https://mirror.stream.centos.org/9-stream/AppStream/aarch64/os/Packages/libdrm-devel-${LIBDRM_VERSION}.rpm -O
+    rpm -i --nosignature --nodeps libdrm-devel-${LIBDRM_VERSION}.rpm
+}
+
 dnf_install_intel_gpu() {
   local intel_rpms=("intel-oneapi-mkl-sycl-devel" "intel-oneapi-dnnl-devel"
     "intel-oneapi-compiler-dpcpp-cpp" "intel-level-zero"
@@ -138,6 +144,8 @@ dnf_install() {
     dnf_install_intel_gpu
   elif [ "$containerfile" = "cann" ]; then
     dnf_install_cann
+  elif [ "$containerfile" = "remoting" ]; then
+    dnf_install_remoting
   fi
 
   dnf_install_ffmpeg
@@ -231,6 +239,9 @@ configure_common_flags() {
   musa)
     common_flags+=("-DGGML_MUSA=ON")
     ;;
+  remoting)
+    common_flags+=("-DGGML_REMOTINGFRONTEND=ON")
+    ;;
   esac
 }
 
@@ -260,7 +271,9 @@ clone_and_build_llama_cpp() {
   install_prefix=$(set_install_prefix)
   git_clone_specific_commit "${LLAMA_CPP_REPO:-https://github.com/ggml-org/llama.cpp}" "$llama_cpp_commit"
   cmake_steps "${common_flags[@]}"
-  install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
+  if [[ "$containerfile" != "remoting" ]]; then
+      install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
+  fi
   cd ..
   if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" != y ]]; then
       rm -rf llama.cpp
@@ -293,7 +306,10 @@ cleanup() {
 }
 
 add_common_flags() {
-  common_flags+=("-DLLAMA_CURL=ON" "-DGGML_RPC=ON")
+  common_flags+=("-DLLAMA_CURL=ON")
+  if [[ "$containerfile" != "remoting" ]]; then
+      common_flags+=("-DGGML_RPC=ON")
+  fi
   case "$containerfile" in
   ramalama)
     if [ "$uname_m" = "x86_64" ] || [ "$uname_m" = "aarch64" ]; then
