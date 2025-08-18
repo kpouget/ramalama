@@ -15,6 +15,12 @@ Python 3.10"
   echo "python3"
 }
 
+dnf_install_remoting() {
+    LIBDRM_VERSION=2.4.123-2.el9.aarch64
+    curl -Ssf https://mirror.stream.centos.org/9-stream/AppStream/aarch64/os/Packages/libdrm-devel-${LIBDRM_VERSION}.rpm -O
+    rpm -i --nosignature --nodeps libdrm-devel-${LIBDRM_VERSION}.rpm
+}
+
 dnf_install_intel_gpu() {
   local intel_rpms=("intel-oneapi-mkl-sycl-devel" "intel-oneapi-dnnl-devel"
     "intel-oneapi-compiler-dpcpp-cpp" "intel-level-zero"
@@ -138,6 +144,8 @@ dnf_install() {
     dnf_install_intel_gpu
   elif [ "$containerfile" = "cann" ]; then
     dnf_install_cann
+  elif [ "$containerfile" = "remoting" ]; then
+    dnf_install_remoting
   fi
 
   dnf_install_ffmpeg
@@ -216,19 +224,23 @@ configure_common_flags() {
   musa)
     common_flags+=("-DGGML_MUSA=ON")
     ;;
+  remoting)
+    common_flags+=("-DGGML_REMOTINGFRONTEND=ON")
+    ;;
   esac
 }
 
 clone_and_build_whisper_cpp() {
   local whisper_flags=("${common_flags[@]}")
   local whisper_cpp_sha="d0a9d8c7f8f7b91c51d77bbaa394b915f79cde6b"
+  local whisper_cpp_sha="${WHISPER_CPP_PULL_REF:-main}"
   whisper_flags+=("-DBUILD_SHARED_LIBS=OFF")
   # See: https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md#compilation-options
   if [ "$containerfile" = "musa" ]; then
     whisper_flags+=("-DCMAKE_POSITION_INDEPENDENT_CODE=ON")
   fi
 
-  git_clone_specific_commit "https://github.com/ggerganov/whisper.cpp" "$whisper_cpp_sha"
+  git_clone_specific_commit "https://github.com/kpouget/whisper.cpp" "$whisper_cpp_sha"
   cmake_steps "${whisper_flags[@]}"
   mkdir -p "$install_prefix/bin"
   cd ..
@@ -236,12 +248,15 @@ clone_and_build_whisper_cpp() {
 }
 
 clone_and_build_llama_cpp() {
-  local llama_cpp_sha="1d72c841888b9450916bdd5a9b3274da380f5b36"
+  local containerfile=$1
+  local llama_cpp_sha="${LLAMA_CPP_PULL_REF:-main}"
   local install_prefix
   install_prefix=$(set_install_prefix)
-  git_clone_specific_commit "https://github.com/ggml-org/llama.cpp" "$llama_cpp_sha"
+  git_clone_specific_commit "https://github.com/kpouget/llama.cpp" "$llama_cpp_sha"
   cmake_steps "${common_flags[@]}"
-  install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
+  if [[ "$containerfile" != "remoting" ]]; then
+      install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
+  fi
   cd ..
   rm -rf llama.cpp
 }
@@ -273,7 +288,10 @@ cleanup() {
 }
 
 add_common_flags() {
-  common_flags+=("-DLLAMA_CURL=ON" "-DGGML_RPC=ON")
+  common_flags+=("-DLLAMA_CURL=ON")
+  if [[ "$containerfile" != "remoting" ]]; then
+      common_flags+=("-DGGML_RPC=ON")
+  fi
   case "$containerfile" in
   ramalama)
     if [ "$uname_m" = "x86_64" ] || [ "$uname_m" = "aarch64" ]; then

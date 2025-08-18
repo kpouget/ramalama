@@ -1,0 +1,6 @@
+FROM registry.access.redhat.com/ubi9/ubi:9.6-1749542372
+
+COPY . /src/ramalama
+WORKDIR /src/ramalama
+RUN container-images/scripts/build_llama_and_whisper.sh "remoting"
+WORKDIR /
