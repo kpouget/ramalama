@@ -34,7 +34,9 @@ add_build_platform() {
       conman_build+=("-t" "$REGISTRY_PATH/${target}")
   fi
   conman_build+=("-f" "container-images/${target}/Containerfile" ".")
-
+  if [ -n "${WHISPER_CPP_PULL_REF:-}" ]; then
+      conman_build+=("--env" "WHISPER_CPP_PULL_REF=$WHISPER_CPP_PULL_REF")
+  fi
   if [ -n "${LLAMA_CPP_PULL_REF:-}" ]; then
       conman_build+=("--env" "LLAMA_CPP_PULL_REF=$LLAMA_CPP_PULL_REF")
   fi
