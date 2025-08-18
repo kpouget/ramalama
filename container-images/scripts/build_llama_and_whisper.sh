@@ -264,7 +264,7 @@ clone_and_build_llama_cpp() {
   local llama_cpp_sha="${LLAMA_CPP_PULL_REF:-main}"
   local install_prefix
   install_prefix=$(set_install_prefix)
-  git_clone_specific_commit "https://github.com/kpouget/llama.cpp" "$llama_cpp_sha"
+  git_clone_specific_commit "https://github.com/crc-org/llama.cpp" "$llama_cpp_sha"
   cmake_steps "${common_flags[@]}"
   if [[ "$containerfile" != "remoting" ]]; then
       install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
