@@ -3,6 +3,14 @@
 DEFAULT_LLAMA_CPP_COMMIT="b45ef2702c262998d5db9887cd3c82f04761237a" # b7872
 MESA_VULKAN_VERSION=25.2.3-101.fc43
 
+dnf_install_remoting() {
+    dnf install -y libdrm-devel
+
+    if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
+        dnf install -y meson libepoxy-devel python3-yaml
+    fi
+}
+
 dnf_install_intel_gpu() {
   local intel_rpms=("intel-oneapi-mkl-sycl-devel" "intel-oneapi-dnnl-devel"
     "intel-oneapi-mkl-devel" "intel-oneapi-mkl-sycl-distributed-dft-devel"
@@ -96,6 +104,8 @@ dnf_install() {
     dnf_install_intel_gpu
   elif [ "$containerfile" = "cann" ]; then
     dnf_install_cann
+  elif [ "$containerfile" = "remoting" ]; then
+    dnf_install_remoting
   fi
 
   if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
@@ -134,6 +144,8 @@ dnf_install_runtime_deps() {
       intel-oneapi-mkl-core intel-oneapi-mkl-sycl-blas intel-oneapi-mkl-sycl-dft
       oneapi-level-zero
     )
+  elif [ "$containerfile" = "remoting" ]; then
+    runtime_pkgs+=(libdrm)
   fi
   dnf install -y --setopt=install_weak_deps=false "${runtime_pkgs[@]}"
   dnf -y clean all
@@ -234,6 +246,21 @@ configure_common_flags() {
   musa)
     common_flags+=("-DGGML_MUSA=ON" "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined")
     ;;
+  remoting)
+      common_flags+=("-DGGML_VIRTGPU=ON")
+
+      if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
+          common_flags+=("-DGGML_VIRTGPU_BACKEND=ON -DDGGML_BACKEND_DL=ON")
+
+          if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" == "vulkan" ]; then
+              common_flags+=("-DGGML_VULKAN=ON")
+          else
+              echo "ERROR: unknown API Remoting backend requested: ${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}"
+              echo "ERROR: expected 'vulkan' or unset. Got '${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}'."
+              exit 1
+          fi
+      fi
+    ;;
   esac
 }
 
@@ -250,6 +277,22 @@ clone_and_build_llama_cpp() {
 cleanup() {
   available dnf && dnf -y clean all
   ldconfig # needed for libraries
+}
+
+clone_and_build_virglrenderer() {
+    virgl_commit=${VIRGL_COMMIT:-main-linux}
+    virgl_repo=${VIRGL_REPO:-https://gitlab.freedesktop.org/kpouget/virglrenderer}
+    git_clone_specific_commit "$virgl_repo" "$virgl_commit"
+
+    meson setup ./build -Dvenus=true -Dapir=true --buildtype=debug --prefix=/usr
+    ninja -C ./build
+    ninja -C ./build install
+
+    cd ..
+
+    if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" != y ]]; then
+        rm -rf virglrenderer
+    fi
 }
 
 main() {
@@ -274,9 +317,15 @@ main() {
   configure_common_flags
 
   available dnf && dnf_install
+
   setup_build_env
 
   clone_and_build_llama_cpp
+
+  if [ "$containerfile" = "remoting" ] && [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
+      clone_and_build_virglrenderer
+  fi
+
   cleanup
 }
 
