@@ -149,6 +149,11 @@ dnf_install() {
   fi
 
   dnf_install_ffmpeg
+
+  if [[ "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" == y ]]; then
+      dnf install -y gdb strace
+  fi
+
   dnf -y clean all
 }
 
@@ -200,7 +205,13 @@ set_install_prefix() {
 }
 
 configure_common_flags() {
-  common_flags=("-DGGML_NATIVE=OFF" "-DGGML_CMAKE_BUILD_TYPE=Release")
+  common_flags=("-DGGML_NATIVE=OFF")
+  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG:-}" == y ]]; then
+      common_flags=("-DGGML_CMAKE_BUILD_TYPE=Debug")
+  else
+      common_flags=("-DGGML_CMAKE_BUILD_TYPE=Release")
+  fi
+
   case "$containerfile" in
   rocm*)
     if [ "${ID}" = "fedora" ]; then
@@ -244,7 +255,9 @@ clone_and_build_whisper_cpp() {
   cmake_steps "${whisper_flags[@]}"
   mkdir -p "$install_prefix/bin"
   cd ..
-  rm -rf whisper.cpp
+  if [[ "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" != y ]]; then
+      rm -rf whisper.cpp
+  fi
 }
 
 clone_and_build_llama_cpp() {
@@ -258,7 +271,9 @@ clone_and_build_llama_cpp() {
       install -m 755 build/bin/rpc-server "$install_prefix"/bin/rpc-server
   fi
   cd ..
-  rm -rf llama.cpp
+  if [[ "${RAMALAMA_IMAGE_INCLUDE_DEBUG:-}" != y ]]; then
+      rm -rf llama.cpp
+  fi
 }
 
 install_ramalama() {
