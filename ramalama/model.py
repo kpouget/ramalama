@@ -653,8 +653,6 @@ class Model(ModelBase):
                 if chat_template_path is not None:
                     exec_args += ["--chat-template-file", chat_template_path]
 
-        if should_colorize():
-            exec_args += ["--log-colors", "on"]
 
         exec_args += [
             "--alias",

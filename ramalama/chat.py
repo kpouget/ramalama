@@ -205,6 +205,7 @@ class RamaLamaShell(cmd.Cmd):
                 return results
         except Exception as e:
             logger.debug(f"MCP request handling error: {e}", exc_info=True)
+            raise e
             return f"Error using MCP tools: {e}"
 
     def _handle_manual_tool_selection(self, content: str):

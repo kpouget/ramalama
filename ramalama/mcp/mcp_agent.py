@@ -57,6 +57,9 @@ class LLMAgent:
 
     def should_use_tools(self, content: str, conversation_history: list = None) -> bool:
         """Determine if the request should be handled by tools using LLM."""
+
+        return True
+
         tools_context = "Available tools:\n"
         for i, tool in enumerate(self.available_tools, 1):
             server_info = f" (from {tool['server']})" if 'server' in tool else ""
@@ -90,7 +93,7 @@ Should this request use the available tools?"""
                 ),
             },
         ]
-
+        print("Q>", messages[0]["content"])
         response = self._call_llm(messages)
         return response and response.upper().strip() == "YES"
 
@@ -100,6 +103,8 @@ Should this request use the available tools?"""
         """
         request_data = {"messages": messages, "stream": True}
         data = json.dumps(request_data).encode("utf-8")
+        #print("="*20)
+        #print("Q>", json.dumps(request_data, indent=4).replace("\\n", "\n").partition("Available tools")[0].strip())
 
         request = urllib.request.Request(
             f"{self.llm_base_url}/chat/completions",
@@ -112,8 +117,12 @@ Should this request use the available tools?"""
             content = ""
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
+                    #print("A>")
                     for raw_line in response:
                         line = raw_line.decode("utf-8").strip()
+                        #if line:
+                        #    print(line)
+
                         if line.startswith("data: "):
                             payload = line[6:]
                             if payload.strip() == "[DONE]":
@@ -126,6 +135,8 @@ Should this request use the available tools?"""
                                         content += delta["content"]
                             except json.JSONDecodeError:
                                 logging.warning("Malformed SSE line: %s", payload)
+                print("ANSWER>", content.strip())
+                print("="*20)
                 return content.strip()
             except Exception as e:
                 logging.error("LLM call failed: %s", e, exc_info=True)
@@ -216,6 +227,7 @@ Should this request use the available tools?"""
             {"role": "user", "content": "\n".join(prompt_lines)},
         ]
 
+        print("Q>", messages[0]["content"])
         if stream:
             return self._call_llm(messages, console_stream=True) or {}
         else:
@@ -250,7 +262,9 @@ Should this request use the available tools?"""
             return "No tools available."
 
         selected_tools = self._select_tools(task)
+        print(f"Found {len(selected_tools)} relevant tools.")
         if not selected_tools:
+            return self._why_not(task, stream)
             return "No relevant tools found for this task."
 
         print(f"Selected tools: {', '.join([t['name'] for t in selected_tools])}")
@@ -266,6 +280,7 @@ Should this request use the available tools?"""
                     arguments = self._get_tool_arguments_manual(tool)
                 else:
                     arguments = self._get_tool_arguments_auto(tool, task)
+                    print(f"Arguments for {tool['name']} --> {arguments}")
 
                 # Call the tool with the arguments
                 result = client.call_tool(tool["name"], arguments)
@@ -340,20 +355,30 @@ Should this request use the available tools?"""
             {
                 "role": "system",
                 "content": (
-                    "You are a helpful assistant that selects ALL relevant tools for a given task. "
-                    "Respond ONLY with a comma-separated list of tool names. "
+                    "You control a physical robot, in the real world, with the available tools. "
+                    "If the user instruction is not part of the available tools, notify the user and do not fall back to another tool. "
+                    "You should NOT omit any instuction given by the user. "
+                    "You are NOT a chabot. You are translating user instructions into function calls for driving the robot. "
+
+                    "You are a robot-driver assistant that selects ONE AND ONLY relevant tool for a given task. "                    "Respond ONLY with a comma-separated list of tool names. "
                     "If none are useful, respond with NONE."
                 ),
             },
             {"role": "user", "content": f"Task: {task}\n\n{tools_context}"},
         ]
 
+        print("Q>", messages[0]["content"])
         response = self._call_llm(messages).strip()
+
+        #for delim  in " ", ",", "(":
+        #    response = response.split(delim)[0]
+
         if not response or response.upper() == "NONE":
             return []
 
         chosen = [name.strip().lower() for name in response.split(",")]
-        return [t for t in self.available_tools if t["name"].lower() in chosen]
+        available_names = {t["name"].lower(): t for t in self.available_tools}
+        return [available_names[name] for name in chosen if name in available_names]
 
     def _is_task_complete(self, task: str, content: str) -> bool:
         """Check if the task is complete based on the tool result."""
@@ -367,7 +392,9 @@ Should this request use the available tools?"""
             },
             {"role": "user", "content": f"Task: {task}\n\nTool result:\n{content}\n\nIs this task complete?"},
         ]
+        print("Q>", messages[0]["content"])
         response = self._call_llm(messages)
+
         return response and response.upper().strip() == "YES"
 
     def _result(self, task: str, content: str, stream: bool = False) -> str:
@@ -376,13 +403,40 @@ Should this request use the available tools?"""
             {
                 "role": "system",
                 "content": (
-                    "You are a helpful assistant that formats and presents information clearly. "
-                    "Understand the user request, analyze the raw tool output, and provide a "
-                    "clear, well-structured answer."
+                    "You are a helpful assistant that formats and presents information in a succint way. "
+                    "Understand the user request, analyze the raw tool output, and provide a short but "
+                    "clear and well-structured answer."
                 ),
             },
             {"role": "user", "content": f"Request: {task}\n\nRaw tool output:\n{content}"},
         ]
+        print("Q>", messages[0]["content"])
+        result = self._call_llm(messages, console_stream=stream)
+        if stream and result is None:
+            # Add newline after streaming is complete
+            print("")
+        return result
+
+    def _why_not(self, task: str, stream: bool = False) -> str:
+        """Format the tool result into a user-friendly response."""
+
+        tools_context = "Available tools:\n"
+        for i, tool in enumerate(self.available_tools, 1):
+            server_info = f" (from {tool['server']})" if 'server' in tool else ""
+            tools_context += f"{i}. {tool['name']}: {tool['description']}{server_info}\n"
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful assistant that formats and presents information in a succint way. "
+                    "Understand the user request, analyze why no tool could be used, and provide a short but "
+                    "clear and well-structured answer."
+                ),
+            },
+            {"role": "user", "content": f"User Request: {task}\n\n{tools_context}"},
+        ]
+        print("Q>", messages[0]["content"])
         result = self._call_llm(messages, console_stream=stream)
         if stream and result is None:
             # Add newline after streaming is complete
