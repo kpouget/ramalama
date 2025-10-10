@@ -258,6 +258,7 @@ Should this request use the available tools?"""
 
     def execute_task(self, task: str, manual: bool = False, stream: bool = False) -> str:
         """Execute one or more relevant tools for a task and combine results."""
+
         if not self.available_tools:
             return "No tools available."
 

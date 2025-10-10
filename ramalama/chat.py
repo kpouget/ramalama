@@ -12,6 +12,10 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import timedelta
+import threading
+
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
 from ramalama.arg_types import ChatArgsType
 from ramalama.common import perror
@@ -94,6 +98,37 @@ class ChatOperationalArgs:
     name: str | None = None
     keepalive: int | None = None
 
+def make_handler(shell):
+    class SimpleHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            nonlocal shell
+            parsed_url = urlparse(self.path)
+            query_params = parse_qs(parsed_url.query)
+
+            if 'query' not in query_params:
+                self.send_response(400)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                response = "No query parameter provided. Use ?query=your_text"
+                self.wfile.write(response.encode())
+                return
+
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+
+            query = query_params['query'][0]
+
+            print("\n"*4)
+            print("="*10)
+            print("="*3, f"Remote query: {query}")
+            print("="*10)
+
+            response = shell._handle_mcp_request(query, stream=False) + "\n"
+
+            self.wfile.write(response.encode())
+
+    return SimpleHandler
 
 class RamaLamaShell(cmd.Cmd):
     def __init__(self, args: ChatArgsType, operational_args: ChatOperationalArgs | None = None):
@@ -107,6 +142,11 @@ class RamaLamaShell(cmd.Cmd):
         self.prompt = args.prefix
         self.url = f"{args.url}/chat/completions"
         self.prep_rag_message()
+
+        self.server_port = int(os.environ.get("RAMALAMA_MCP_CHAT_PORT", 8002))
+        self.server = HTTPServer(('localhost', self.server_port), make_handler(self))
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
         self.mcp_agent = None
         self.initialize_mcp()
 
@@ -177,6 +217,7 @@ class RamaLamaShell(cmd.Cmd):
                 print("  - Ask questions naturally (automatic tool selection)")
                 print("  - Use '/tool [question]' to manually select which tool to use")
                 print("  - Use '/bye' or 'exit' to quit")
+                print(f"  - Use http://localhost:{self.server_port}?query=... to query remotely the MCP server")
 
         except Exception as e:
             perror(f"Failed to initialize MCP: {e}")
@@ -188,11 +229,11 @@ class RamaLamaShell(cmd.Cmd):
             return False
         return self.mcp_agent.should_use_tools(content, self.conversation_history)
 
-    def _handle_mcp_request(self, content: str) -> str:
+    def _handle_mcp_request(self, content: str, stream: bool = True) -> str:
         """Handle a request using MCP tools (multi-tool capable, automatic)."""
         try:
             # Automatic tool selection and argument generation
-            results = self.mcp_agent.execute_task(content, manual=False, stream=True)
+            results = self.mcp_agent.execute_task(content, manual=False, stream=stream)
 
             # When streaming, results will be None since output is streamed directly
             if results is None:
