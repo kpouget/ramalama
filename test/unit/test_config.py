@@ -3,16 +3,26 @@ from unittest.mock import patch
 
 import pytest
 
-from ramalama.config import DEFAULT_PORT, default_config, get_default_engine, get_default_store, load_env_config
+from ramalama.config import (
+    DEFAULT_PORT,
+    BaseConfig,
+    default_config,
+    get_default_engine,
+    get_default_store,
+    load_env_config,
+)
 
 
 def test_correct_config_defaults(monkeypatch):
     monkeypatch.delenv("RAMALAMA_IMAGE", raising=False)
-    cfg = default_config()
+    with patch("ramalama.config.load_file_config", return_value={}):
+        with patch("ramalama.config.load_env_config", return_value={}):
+            cfg = default_config()
 
     assert cfg.carimage == "registry.access.redhat.com/ubi10-micro:latest"
     assert cfg.container in [True, False]  # depends on env/system
-    assert cfg.ctx_size == 2048
+    assert cfg.ctx_size == 0
+    assert cfg.cache_reuse == 256
     assert cfg.engine in ["podman", "docker", None]
     assert cfg.env == []
     assert cfg.host == "0.0.0.0"
@@ -23,17 +33,20 @@ def test_correct_config_defaults(monkeypatch):
     assert cfg.ngl == -1
     assert cfg.threads == -1
     assert cfg.port == str(DEFAULT_PORT)
-    assert cfg.pull == "newer"
+    assert cfg.pull in ["newer", "always"]  # depends on engine
     assert cfg.runtime == "llama.cpp"
     assert cfg.store == get_default_store()
     assert cfg.temp == "0.8"
     assert cfg.transport == "ollama"
     assert cfg.ocr is False
+    assert cfg.verify is True
 
 
 def test_config_defaults_not_set(monkeypatch):
     monkeypatch.delenv("RAMALAMA_IMAGE", raising=False)
-    cfg = default_config()
+    with patch("ramalama.config.load_file_config", return_value={}):
+        with patch("ramalama.config.load_env_config", return_value={}):
+            cfg = default_config()
 
     assert cfg.is_set("carimage") is False
     assert cfg.is_set("container") is False  # depends on env/system
@@ -54,6 +67,17 @@ def test_config_defaults_not_set(monkeypatch):
     assert cfg.is_set("temp") is False
     assert cfg.is_set("transport") is False
     assert cfg.is_set("ocr") is False
+    assert cfg.is_set("verify") is False
+
+
+def test_base_config_normalizes_pull_for_docker():
+    config = BaseConfig(engine="docker", pull="newer")
+    assert config.pull == "always"
+
+
+def test_base_config_preserves_pull_for_non_docker():
+    config = BaseConfig(engine="podman", pull="newer")
+    assert config.pull == "newer"
 
 
 def test_file_config_overrides_defaults():
@@ -61,6 +85,7 @@ def test_file_config_overrides_defaults():
         "image": "custom/image:latest",
         "threads": 8,
         "container": False,
+        "verify": False,
     }
 
     with patch("ramalama.config.load_file_config", return_value=mock_file_config):
@@ -69,10 +94,12 @@ def test_file_config_overrides_defaults():
             assert cfg.image == "custom/image:latest"
             assert cfg.threads == 8
             assert cfg.container is False
+            assert cfg.verify is False
 
             assert cfg.is_set("image") is True
             assert cfg.is_set("threads") is True
             assert cfg.is_set("container") is True
+            assert cfg.is_set("verify") is True
 
 
 def test_env_overrides_file_and_default():
@@ -138,7 +165,6 @@ def test_cfg_container_not_set():
 
 
 class TestGetDefaultEngine:
-
     def test_get_default_engine_with_toolboxenv(self):
         with patch("os.getenv", return_value=None):
             with patch("os.path.exists", side_effect=lambda x: x == "/run/.toolboxenv"):
@@ -164,12 +190,26 @@ class TestGetDefaultEngine:
     def test_get_default_engine_with_docker_available_osx(self):
         with patch("ramalama.config.available", side_effect=lambda x: x == "docker"):
             with patch("sys.platform", "darwin"):
-                assert get_default_engine() is None
+                assert get_default_engine() == "docker"
 
     def test_get_default_engine_with_docker_available_linux(self):
         with patch("ramalama.config.available", side_effect=lambda x: x == "docker"):
             with patch("sys.platform", "linux"):
                 assert get_default_engine() == "docker"
+
+    def test_default_engine_falls_back_to_docker_when_podman_machine_missing(self):
+        with (
+            patch("ramalama.config.available", side_effect=lambda binary: binary in {"podman", "docker"}),
+            patch("ramalama.config.apple_vm", return_value=False),
+            patch("ramalama.config.load_file_config", return_value={}),
+            patch("ramalama.config.load_env_config", return_value={}),
+            patch("ramalama.config.os.path.exists", return_value=False),
+            patch("ramalama.config.sys.platform", "darwin"),
+        ):
+            cfg = default_config()
+
+        assert cfg.engine == "docker"
+        assert cfg.is_set("engine") is False
 
 
 class TestLoadEnvConfig:
@@ -182,6 +222,7 @@ class TestLoadEnvConfig:
             "RAMALAMA_THREADS": "8",
             "RAMALAMA_CONTAINER": "true",
             "RAMALAMA_HOST": "127.0.0.1",
+            "RAMALAMA_VERIFY": "false",
         }
 
         result = load_env_config(env)
@@ -191,6 +232,7 @@ class TestLoadEnvConfig:
             "threads": 8,
             "container": True,
             "host": "127.0.0.1",
+            "verify": False,
         }
         assert result == expected
 

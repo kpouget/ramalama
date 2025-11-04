@@ -10,8 +10,9 @@ PATH := $(PATH):$(HOME)/.local/bin
 MYPIP ?= pip
 IMAGE ?= ramalama
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
-PYTHON_SCRIPTS := $(shell grep -lEr "^\#\!\s*/usr/bin/(env +)?python(3)?(\s|$$)" --exclude-dir={.venv,venv} $(PROJECT_DIR) || true)
-PYTEST_COMMON_CMD ?= PYTHONPATH=. pytest test/unit/ -vv
+EXCLUDE_DIRS := .venv venv .tox build
+EXCLUDE_OPTS := $(addprefix --exclude-dir=,$(EXCLUDE_DIRS))
+PYTHON_SCRIPTS := $(shell grep -lEr "^\#\!\s*/usr/bin/(env +)?python(3)?(\s|$$)" $(EXCLUDE_OPTS) $(PROJECT_DIR) || true)
 BATS_IMAGE ?= localhost/bats:latest
 
 default: help
@@ -42,13 +43,6 @@ help:
 	@echo
 	@echo "  - make clean"
 	@echo
-
-install-detailed-cov-requirements:
-	${MYPIP} install ".[cov-detailed]"
-
-.PHONY: install-cov-requirements
-install-cov-requirements:
-	${MYPIP} install ".[cov]"
 
 .PHONY: install-uv
 install-uv:
@@ -108,16 +102,21 @@ build_multi_arch:
 install-docs: docs
 	make -C docs install
 
-.PHONY: docs
-docs:
-	make -C docs
+.PHONY: docs docs-manpages docsite-docs
+docs: docs-manpages docsite-docs
+
+docs-manpages:
+	$(MAKE) -C docs
+
+docsite-docs:
+	$(MAKE) -C docsite convert
 
 .PHONY: lint
 lint:
 ifneq (,$(wildcard /usr/bin/python3))
 	/usr/bin/python3 -m compileall -q -x '\.venv' .
 endif
-	! grep -ri --exclude-dir ".venv" --exclude-dir "*/.venv" "#\!/usr/bin/python3" .
+	! grep -ri $(EXCLUDE_OPTS) "#\!/usr/bin/python3" .
 	flake8 $(PROJECT_DIR) $(PYTHON_SCRIPTS)
 	shellcheck *.sh */*.sh */*/*.sh
 
@@ -133,7 +132,7 @@ format:
 
 .PHONY: codespell
 codespell:
-	codespell -w $(PROJECT_DIR) $(PYTHON_SCRIPTS)
+	codespell $(PROJECT_DIR) $(PYTHON_SCRIPTS)
 
 .PHONY: test-run
 test-run:
@@ -147,8 +146,12 @@ ifeq ($(OS),Linux)
 	hack/xref-helpmsgs-manpages
 endif
 
+.PHONY: type-check
+type-check:
+	mypy $(addprefix --exclude=,$(EXCLUDE_DIRS)) --exclude test $(PROJECT_DIR)
+
 .PHONY: validate
-validate: codespell lint check-format man-check
+validate: codespell lint check-format man-check type-check
 
 .PHONY: pypi-build
 pypi-build:   clean
@@ -177,14 +180,15 @@ bats-image:
 	podman inspect $(BATS_IMAGE) &> /dev/null || \
 		podman build -t $(BATS_IMAGE) -f container-images/bats/Containerfile .
 
-bats-in-container: extra-opts = --security-opt unmask=/proc/* --device /dev/net/tun --device /dev/fuse
+bats-in-container e2e-tests-in-container: extra-opts = --security-opt unmask=/proc/* --device /dev/net/tun
 
 %-in-container: bats-image
-	podman run -it --rm \
+	podman run --rm \
 		--userns=keep-id:size=200000 \
 		--security-opt label=disable \
 		--security-opt=mask=/sys/bus/pci/drivers/i915 \
 		$(extra-opts) \
+		-v /tmp \
 		-v $(CURDIR):/src \
 		$(BATS_IMAGE) make $*
 
@@ -192,30 +196,40 @@ bats-in-container: extra-opts = --security-opt unmask=/proc/* --device /dev/net/
 ci:
 	test/ci.sh
 
+.PHONY: requires-tox
+requires-tox:
+	@command -v tox >/dev/null 2>&1 || ${MYPIP} install tox
+
 .PHONY: unit-tests
-unit-tests:
-	$(PYTEST_COMMON_CMD)
+unit-tests: requires-tox
+	tox
 
 .PHONY: unit-tests-verbose
-unit-tests-verbose:
-	$(PYTEST_COMMON_CMD) --full-trace --capture=tee-sys
-
-.PHONY: cov-run
-cov-run: install-cov-requirements
-	PYTHONPATH=. coverage run -m pytest test/unit/
+unit-tests-verbose: requires-tox
+	tox -- --full-trace --capture=tee-sys
 
 .PHONY: cov-tests
-cov-tests: cov-run
-	PYTHONPATH=. coverage report
+cov-tests: requires-tox
+	tox -- --cov
 
 .PHONY: detailed-cov-tests
-detailed-cov-tests: install-detailed-cov-requirements cov-run
-	PYTHONPATH=. coverage report -m
-	PYTHONPATH=. coverage html
-	PYTHONPATH=. coverage json
-	PYTHONPATH=. coverage lcov
-	PYTHONPATH=. coverage xml
+detailed-cov-tests: requires-tox
+	tox -e coverage
 
+.PHONY: e2e-tests
+e2e-tests: requires-tox
+	# This makefile target runs the new e2e-tests pytest based
+	tox -q -e e2e
+
+.PHONY: e2e-tests-nocontainer
+e2e-tests-nocontainer: requires-tox
+	# This makefile target runs the new e2e-tests pytest based
+	tox -q -e e2e -- --no-container
+
+.PHONY: e2e-tests-docker
+e2e-tests-docker: requires-tox
+	# This makefile target runs the new e2e-tests pytest based
+	tox -q -e e2e -- --container-engine=docker
 
 .PHONY: end-to-end-tests
 end-to-end-tests: validate bats bats-nocontainer ci
@@ -227,6 +241,11 @@ test: tests
 
 .PHONY: tests
 tests: unit-tests end-to-end-tests
+
+.PHONY: rag-requirements
+rag-requirements:
+	touch container-images/common/requirements-rag.in
+	make -C container-images/common rag-requirements
 
 .PHONY: clean
 clean:

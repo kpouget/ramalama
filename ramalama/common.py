@@ -13,7 +13,7 @@ import shutil
 import string
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypedDict, cast, get_args
 
@@ -24,8 +24,11 @@ from ramalama.logger import logger
 from ramalama.version import version
 
 if TYPE_CHECKING:
+    from argparse import Namespace
+
     from ramalama.arg_types import SUPPORTED_ENGINES, ContainerArgType
     from ramalama.config import Config
+    from ramalama.transports.base import Transport
 
 MNT_DIR = "/mnt/models"
 MNT_FILE = f"{MNT_DIR}/model.file"
@@ -38,7 +41,7 @@ RAG_CONTENT = f"{MNT_DIR}/vector.db"
 
 MIN_VRAM_BYTES = 1073741824  # 1GiB
 
-SPLIT_MODEL_PATH_RE = r'(.*)/([^/]*)-00001-of-(\d{5})\.gguf'
+SPLIT_MODEL_PATH_RE = r'(.*?)(?:/)?([^/]*)-00001-of-(\d{5})\.gguf'
 
 
 def is_split_file_model(model_path):
@@ -93,14 +96,14 @@ def handle_provider(machine, config: Config | None = None) -> bool | None:
 def apple_vm(engine: SUPPORTED_ENGINES, config: Config | None = None) -> bool:
     podman_machine_list = [engine, "machine", "list", "--format", "json", "--all-providers"]
     try:
-        machines_json = run_cmd(podman_machine_list, ignore_stderr=True).stdout.decode("utf-8").strip()
+        machines_json = run_cmd(podman_machine_list, ignore_stderr=True, encoding="utf-8").stdout.strip()
         machines = json.loads(machines_json)
         for machine in machines:
             result = handle_provider(machine, config)
             if result is not None:
                 return result
-    except subprocess.CalledProcessError:
-        pass
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to list and parse podman machines: {e}")
     return False
 
 
@@ -134,7 +137,7 @@ def exec_cmd(args, stdout2null: bool = False, stderr2null: bool = False):
         raise
 
 
-def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_all=False, encoding=None):
+def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_all=False, encoding=None, env=None):
     """
     Run the given command arguments.
 
@@ -150,6 +153,7 @@ def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_
     logger.debug(f"Working directory: {cwd}")
     logger.debug(f"Ignore stderr: {ignore_stderr}")
     logger.debug(f"Ignore all: {ignore_all}")
+    logger.debug(f"env: {env}")
 
     serr = None
     if ignore_all or ignore_stderr:
@@ -159,17 +163,74 @@ def run_cmd(args, cwd=None, stdout=subprocess.PIPE, ignore_stderr=False, ignore_
     if ignore_all:
         sout = subprocess.DEVNULL
 
-    result = subprocess.run(args, check=True, cwd=cwd, stdout=sout, stderr=serr, encoding=encoding)
+    if env:
+        env = os.environ | env
+
+    result = subprocess.run(args, check=True, cwd=cwd, stdout=sout, stderr=serr, encoding=encoding, env=env)
     logger.debug(f"Command finished with return code: {result.returncode}")
 
     return result
+
+
+def populate_volume_from_image(model: Transport, args: Namespace, output_filename: str, src_model_dir: str = "models"):
+    """Builds a Docker-compatible mount string that mirrors Podman image mounts for model assets.
+
+    This function requires the model
+    """
+
+    vol_hash = hashlib.sha256(model.model.encode()).hexdigest()[:12]
+    volume = f"ramalama-models-{vol_hash}"
+    src = f"src-{vol_hash}"
+
+    # Ensure volume exists
+    run_cmd([args.engine, "volume", "create", volume], ignore_stderr=True)
+
+    # Fresh source container to export from
+    run_cmd([args.engine, "rm", "-f", src], ignore_stderr=True)
+    run_cmd([args.engine, "create", "--name", src, model.model])
+
+    try:
+        # Stream whole rootfs -> extract only models/<basename>
+        export_cmd = [args.engine, "export", src]
+        untar_cmd = [
+            args.engine,
+            "run",
+            "--rm",
+            "-i",
+            "--mount",
+            f"type=volume,src={volume},dst=/mnt",
+            "busybox",
+            "tar",
+            "-C",
+            "/mnt",
+            "--strip-components=1",
+            "-x",
+            "-p",
+            "-f",
+            "-",
+            f"{src_model_dir}/{output_filename}",  # NOTE: double check this
+        ]
+
+        with (
+            subprocess.Popen(export_cmd, stdout=subprocess.PIPE) as p_out,
+            subprocess.Popen(untar_cmd, stdin=p_out.stdout) as p_in,
+        ):
+            p_out.stdout.close()  # type: ignore
+            rc_in = p_in.wait()
+            rc_out = p_out.wait()
+            if rc_in != 0 or rc_out != 0:
+                raise subprocess.CalledProcessError(rc_in or rc_out, untar_cmd if rc_in else export_cmd)
+    finally:
+        run_cmd([args.engine, "rm", "-f", src], ignore_stderr=True)
+
+    return volume
 
 
 def find_working_directory():
     return os.path.dirname(__file__)
 
 
-def generate_sha256(to_hash: str) -> str:
+def generate_sha256(to_hash: str, with_sha_prefix: bool = True) -> str:
     """
     Generates a sha256 for a string.
 
@@ -181,7 +242,9 @@ def generate_sha256(to_hash: str) -> str:
     """
     h = hashlib.new("sha256")
     h.update(to_hash.encode("utf-8"))
-    return f"sha256-{h.hexdigest()}"
+    if with_sha_prefix:
+        return f"sha256-{h.hexdigest()}"
+    return h.hexdigest()
 
 
 def verify_checksum(filename: str) -> bool:
@@ -230,7 +293,7 @@ def genname():
 def engine_version(engine: SUPPORTED_ENGINES) -> str:
     # Create manifest list for target with imageid
     cmd_args = [str(engine), "version", "--format", "{{ .Client.Version }}"]
-    return run_cmd(cmd_args).stdout.decode("utf-8").strip()
+    return run_cmd(cmd_args, encoding="utf-8").stdout.strip()
 
 
 class CDI_DEVICE(TypedDict):
@@ -239,26 +302,6 @@ class CDI_DEVICE(TypedDict):
 
 class CDI_RETURN_TYPE(TypedDict):
     devices: list[CDI_DEVICE]
-
-
-def load_cdi_yaml(stream: Iterable[str]) -> CDI_RETURN_TYPE:
-    # Returns a dict containing just the "devices" key, whose value is
-    # a list of dicts, each mapping the key "name" to a device name.
-    # For example: {'devices': [{'name': 'all'}]}
-    # This depends on the key "name" being unique to the list of dicts
-    # under "devices" and the value of the "name" key being on the
-    # same line following a colon.
-
-    data: CDI_RETURN_TYPE = {"devices": []}
-    parsed = yaml.safe_load(stream) or {}
-    devices = parsed.get("devices") or []
-    for device in devices:
-        if not isinstance(device, dict):
-            continue
-        for key, value in device.items():
-            if key == "name":
-                data['devices'].append({'name': value})
-    return data
 
 
 def load_cdi_config(spec_dirs: list[str]) -> CDI_RETURN_TYPE | None:
@@ -273,18 +316,16 @@ def load_cdi_config(spec_dirs: list[str]) -> CDI_RETURN_TYPE | None:
                 if ext in [".yaml", ".yml"]:
                     try:
                         with open(file_path, "r") as stream:
-                            return load_cdi_yaml(stream)
-                    except OSError:
+                            return yaml.safe_load(stream)
+                    except (OSError, yaml.YAMLError) as e:
+                        logger.warning(f"Failed to load YAML file {file_path}: {e}")
                         continue
                 elif ext == ".json":
                     try:
                         with open(file_path, "r") as stream:
                             return json.load(stream)
-                    except json.JSONDecodeError:
-                        continue
-                    except UnicodeDecodeError:
-                        continue
-                    except OSError:
+                    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+                        logger.warning(f"Failed to load JSON file {file_path}: {e}")
                         continue
     return None
 
@@ -293,9 +334,14 @@ def find_in_cdi(devices: list[str]) -> tuple[list[str], list[str]]:
     # Attempts to find a CDI configuration for each device in devices
     # and returns a list of configured devices and a list of
     # unconfigured devices.
-    cdi = load_cdi_config(['/etc/cdi', '/var/run/cdi'])
-    cdi_devices = cdi.get("devices", []) if cdi else []
-    cdi_device_names = [name for cdi_device in cdi_devices if (name := cdi_device.get("name"))]
+    cdi = load_cdi_config(['/var/run/cdi', '/etc/cdi'])
+    try:
+        cdi_devices = cdi.get("devices", []) if cdi else []
+        cdi_device_names = [name for cdi_device in cdi_devices if (name := cdi_device.get("name"))]
+    except (AttributeError, KeyError, TypeError) as e:
+        # Malformed YAML or JSON. Treat everything as unconfigured but warn.
+        logger.warning(f"Unable to process CDI configuration: {e}")
+        return ([], devices)
 
     configured = []
     unconfigured = []
@@ -379,7 +425,7 @@ def check_nvidia() -> Literal["cuda"] | None:
 def check_ascend() -> Literal["cann"] | None:
     try:
         command = ['npu-smi', 'info']
-        run_cmd(command).stdout.decode("utf-8")
+        run_cmd(command, encoding="utf-8")
         os.environ["ASCEND_VISIBLE_DEVICES"] = "0"
         return "cann"
     except Exception:
@@ -389,6 +435,10 @@ def check_ascend() -> Literal["cann"] | None:
 
 
 def check_rocm_amd() -> Literal["hip"] | None:
+    if is_arm():
+        # ROCm is not available for arm64, use Vulkan instead
+        return None
+
     gpu_num = 0
     gpu_bytes = 0
     for i, (np, props) in enumerate(amdkfd.gpus()):
@@ -417,6 +467,10 @@ def check_rocm_amd() -> Literal["hip"] | None:
     return None
 
 
+def is_arm() -> bool:
+    return platform.machine() in ('arm64', 'aarch64')
+
+
 def check_intel() -> Literal["intel"] | None:
     igpu_num = 0
     # Device IDs for select Intel GPUs.  See: https://dgpu-docs.intel.com/devices/hardware-table.html
@@ -432,8 +486,9 @@ def check_intel() -> Literal["intel"] | None:
         b"0x7dd5",
         b"0x7d55",
     )
-    # Check to see if any of the device ids in intel_gpus are in the device id of the i915 driver
-    for fp in sorted(glob.glob('/sys/bus/pci/drivers/i915/*/device')):
+    intel_driver_glob_patterns = ["/sys/bus/pci/drivers/i915/*/device", "/sys/bus/pci/drivers/xe/*/device"]
+    # Check to see if any of the device ids in intel_gpus are in the device id of the i915 / xe driver
+    for fp in sorted([i for p in intel_driver_glob_patterns for i in glob.glob(p)]):
         with open(fp, 'rb') as file:
             content = file.read()
             for gpu_id in intel_gpus:
@@ -449,7 +504,7 @@ def check_intel() -> Literal["intel"] | None:
 def check_mthreads() -> Literal["musa"] | None:
     try:
         command = ['mthreads-gmi']
-        run_cmd(command).stdout.decode("utf-8")
+        run_cmd(command, encoding="utf-8")
         os.environ["MUSA_VISIBLE_DEVICES"] = "0"
         return "musa"
     except Exception:
@@ -549,7 +604,7 @@ def check_cuda_version() -> tuple[int, int]:
     try:
         # Run nvidia-smi --version to get version info
         command = ['nvidia-smi']
-        output = run_cmd(command).stdout.decode("utf-8").strip()
+        output = run_cmd(command, encoding="utf-8").stdout.strip()
 
         # Look for CUDA Version in the output
         cuda_match = re.search(r'CUDA Version\s*:\s*(\d+)\.(\d+)', output)
@@ -574,13 +629,13 @@ def select_cuda_image(config: Config) -> str:
         str: The appropriate CUDA image name
 
     Raises:
-        RuntimeError: If CUDA version is less than 12.4
+        NotImplementedError: If CUDA version is less than 12.4
     """
     # Get the default CUDA image from config
     cuda_image = config.images.get("CUDA_VISIBLE_DEVICES")
 
     if cuda_image is None:
-        raise RuntimeError("No image repository found for CUDA_VISIBLE_DEVICES in config.")
+        raise NotImplementedError("No image repository found for CUDA_VISIBLE_DEVICES in config.")
 
     # Check CUDA version and select appropriate image
     cuda_version = check_cuda_version()
@@ -591,7 +646,7 @@ def select_cuda_image(config: Config) -> str:
     elif cuda_version >= (12, 4):
         return f"{cuda_image}-12.4.1"  # Use the specific version for older CUDA
     else:
-        raise RuntimeError(f"CUDA version {cuda_version} is not supported. Minimum required version is 12.4.")
+        raise NotImplementedError(f"CUDA version {cuda_version} is not supported. Minimum required version is 12.4.")
 
 
 class AccelImageArgsWithImage(Protocol):
@@ -620,27 +675,41 @@ AccelImageArgs: TypeAlias = (
 )
 
 
-def accel_image(config: Config) -> str:
+def accel_image(config: Config, images: dict[str, str] | None = None, conf_key: str = "image") -> str:
     """
     Selects and the appropriate image based on config, arguments, environment.
+    "images" is a mapping of environment variable names to image names. If not specified, the
+    mapping from default config will be used.
+    "conf_key" is the configuration key that holds the configured value of the selected image.
+    If not specified, it defaults to "image".
     """
     # User provided an image via config
-    if config.is_set("image"):
-        return tagged_image(config.image)
+    if config.is_set(conf_key):
+        return tagged_image(getattr(config, conf_key))
 
-    set_gpu_type_env_vars()
-    gpu_type = next(iter(get_gpu_type_env_vars()), None)
-
-    # Get image based on detected GPU type
-    image = config.images.get(gpu_type or "", config.default_image)  # the or "" is just to keep mypy happy
-
-    # Special handling for CUDA images based on version - only if the image is the default CUDA image
-    cuda_image = config.images.get("CUDA_VISIBLE_DEVICES")
-    if image == cuda_image:
-        image = select_cuda_image(config)
+    if not images:
+        images = config.images
 
     if config.runtime == "vllm":
-        return "registry.redhat.io/rhelai1/ramalama-vllm"
+        return config.images["VLLM"]
+
+    set_gpu_type_env_vars()
+    gpu_type = next(iter(get_gpu_type_env_vars()), "")
+
+    # Get image based on detected GPU type
+    image = images.get(gpu_type, getattr(config, f"default_{conf_key}"))
+
+    # If the image from the config is specified by tag or digest, return it unmodified
+    if ":" in image:
+        return image
+
+    # Special handling for CUDA images based on version - only if the image is the default CUDA image
+    if conf_key == "image" and image == images.get("CUDA_VISIBLE_DEVICES"):
+        try:
+            image = select_cuda_image(config)
+        except NotImplementedError as e:
+            logger.warn(f"{e}: Falling back to default image.")
+            image = config.default_image
 
     vers = minor_release()
 

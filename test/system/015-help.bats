@@ -50,7 +50,7 @@ function check_help() {
         # If usage lists no arguments (strings in ALL CAPS), confirm
         # by running with 'invalid-arg' and expecting failure.
         if ! expr "$usage" : '.*[A-Z]' >/dev/null; then
-            if [ "$cmd" != "help" ]; then
+            if [ "$cmd" != "help" ] && [ "$cmd" != "daemon" ]; then
                 dprint "$command_string invalid-arg"
                 run_ramalama '?' "$@" $cmd invalid-arg
                 is "$status" 2 \
@@ -101,7 +101,7 @@ function check_help() {
     # Test for regression of #7273 (spurious "--remote" help on output)
     for helpopt in help --help -h; do
         run_ramalama $helpopt
-        is "${lines[0]}" "usage: ramalama [-h] [--debug] [--dryrun] [--engine ENGINE] [--nocontainer]" \
+        is "${lines[0]}" "usage: ramalama [-h] [--debug] [--dryrun] [--engine {podman,docker}]" \
            "ramalama $helpopt: first line of output"
     done
 
@@ -109,7 +109,7 @@ function check_help() {
 
 @test "ramalama verify default image" {
 
-    unset RAMALAMA_IMAGE
+    unset RAMALAMA_IMAGE RAMALAMA_IMAGES RAMALAMA_DEFAULT_IMAGE
     run_ramalama run --help
     is "$output" ".*image IMAGE.*OCI container image to run with the specified AI model"  "Verify default image"
     is "$output" ".*default: quay.io/ramalama/.*"  "Verify default image"
@@ -151,8 +151,8 @@ EOF
     is "$output" ".*default: ${engine1}"  "Verify default engine from environment variable override ramamalama.conf"
 
     engine2=e_$(safename)
-    RAMALAMA_CONTAINER_ENGINE=${engine1} RAMALAMA_CONFIG=${conf} run_ramalama --engine ${engine2} --help
-    is "$output" ".*default: ${engine2}"  "Verify --engine rules them all"
+    RAMALAMA_CONTAINER_ENGINE=${engine1} RAMALAMA_CONFIG=${conf} run_ramalama 2 --engine ${engine2} --help
+    is "$output" ".*ramalama: error: argument --engine: invalid choice: '${engine}' (choose from .*)" "Verify --engine rules them all"
 }
 
 @test "ramalama verify default runtime" {
@@ -162,11 +162,11 @@ EOF
     conf=$RAMALAMA_TMPDIR/ramalama.conf
     cat >$conf <<EOF
 [ramalama]
-runtime="vllm"
+runtime="mlx"
 EOF
 
     RAMALAMA_CONFIG=${conf} run_ramalama --help
-    is "$output" ".*default: vllm"  "Verify default runtime from ramalama.conf"
+    is "$output" ".*default: mlx"  "Verify default runtime from ramalama.conf"
 }
 
 @test "ramalama verify default store" {
@@ -213,7 +213,7 @@ EOF
 
 @test "ramalama verify transport" {
     transport=e_$(safename)
-    RAMALAMA_TRANSPORT=${transport} run_ramalama 1 pull foobar
+    RAMALAMA_TRANSPORT=${transport} run_ramalama 22 pull foobar
     is "$output" "Error: transport \"${transport}\" not supported. Must be oci, huggingface, modelscope, or ollama."  "Verify bogus transport throws error"
 
 }
@@ -237,6 +237,25 @@ EOF
 
     run_ramalama 22 rm
     is "$output" "Error: one MODEL or --all must be specified"  "Verify at least one argument"
+}
+
+@test "ramalama verify default api_key" {
+    API_KEY=e_$(safename)
+    conf=$RAMALAMA_TMPDIR/ramalama.conf
+    cat >$conf <<EOF
+[ramalama]
+api_key="${API_KEY}"
+EOF
+
+
+    RAMALAMA_CONFIG=${conf} run_ramalama chat --help
+    is "$output" ".*default:.*${API_KEY}"  "Verify default api_key from ramalama.conf"
+
+    RAMALAMA_API_KEY=${API_KEY} RAMALAMA_CONFIG=/dev/null run_ramalama chat --help
+    is "$output" ".*default:.*${API_KEY}"  "Verify default api_key from environment is set"
+
+    RAMALAMA_API_KEY=${API_KEY} RAMALAMA_CONFIG=${conf} run_ramalama chat --help
+    is "$output" ".*default:.*${API_KEY}"  "Verify default api_key from environment is set"
 }
 
 # vim: filetype=sh

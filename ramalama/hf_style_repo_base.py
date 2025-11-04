@@ -14,9 +14,10 @@ from ramalama.common import (
     perror,
     run_cmd,
 )
+from ramalama.endian import EndianMismatchError
 from ramalama.logger import logger
-from ramalama.model import Model
 from ramalama.model_store.snapshot_file import SnapshotFile, SnapshotFileType
+from ramalama.transports.base import Transport
 
 
 class HFStyleRepoFile(SnapshotFile):
@@ -89,6 +90,7 @@ class HFStyleRepository(ABC):
         files = []
         if self.model_filename not in cached_files:
             files.append(self.model_file())
+        assert self.model_filename
         if is_split_file_model(self.model_filename):
             # If the model is split, we need to add all parts
             match = re.match(SPLIT_MODEL_PATH_RE, self.model_filename)
@@ -126,17 +128,21 @@ class HFStyleRepository(ABC):
         return files
 
     def model_file(self) -> SnapshotFile:
+        assert self.model_filename
+        assert self.model_hash
         return SnapshotFile(
             url=f"{self.blob_url}/{self.model_filename}",
             header=self.headers,
             hash=self.model_hash,
-            type=SnapshotFileType.Model,
+            type=SnapshotFileType.GGUFModel,
             name=self.model_filename,
             should_show_progress=True,
             should_verify_checksum=True,
         )
 
     def mmproj_file(self) -> SnapshotFile:
+        assert self.model_filename
+        assert self.model_hash
         return SnapshotFile(
             url=f"{self.blob_url}/{self.mmproj_filename}",
             header=self.headers,
@@ -179,13 +185,13 @@ class HFStyleRepository(ABC):
         )
 
 
-class HFStyleRepoModel(Model, ABC):
+class HFStyleRepoModel(Transport, ABC):
     def __init__(self, model, model_store_path):
         super().__init__(model, model_store_path)
 
     @abstractmethod
     def get_cli_command(self):
-        """Return the CLI command name (e.g., 'huggingface-cli', 'modelscope')"""
+        """Return the CLI command name (e.g., 'hf', 'modelscope')"""
         pass
 
     @abstractmethod
@@ -264,21 +270,26 @@ class HFStyleRepoModel(Model, ABC):
             repo = self.create_repository(name, organization, tag)
             snapshot_hash = repo.model_hash
             files = repo.get_file_list(cached_files)
-            self.model_store.new_snapshot(tag, snapshot_hash, files)
+            self.model_store.new_snapshot(tag, snapshot_hash, files, verify=getattr(args, "verify", True))
 
+        except EndianMismatchError:
+            # No use pulling again
+            raise
         except Exception as e:
             if not available(self.get_cli_command()):
                 perror(f"URL pull failed and {self.get_cli_command()} not available")
                 raise KeyError(f"Failed to pull model: {str(e)}")
 
             # Create temporary directory for downloading via CLI
+            # Ensure the base store path exists before creating the temp directory inside it
+            os.makedirs(self.model_store.base_path, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="tmp_hfcli_", dir=self.model_store.base_path) as tempdir:
                 model = f"{organization}/{name}"
                 conman_args = self.get_cli_download_args(tempdir, model)
                 run_cmd(conman_args)
 
                 snapshot_hash, files = self._collect_cli_files(tempdir)
-                self.model_store.new_snapshot(tag, snapshot_hash, files)
+                self.model_store.new_snapshot(tag, snapshot_hash, files, verify=getattr(args, "verify", True))
 
     def exec(self, cmd_args, args):
         try:

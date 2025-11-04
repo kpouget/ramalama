@@ -3,6 +3,7 @@
 load helpers
 
 MODEL=smollm:135m
+MODEL_FULLNAME=smollm-135M-instruct-v0.2-Q8_0-GGUF
 
 @test "ramalama --dryrun run basic output" {
     image=m_$(safename)
@@ -19,9 +20,11 @@ EOF
 
 	run_ramalama -q --dryrun run ${MODEL}
 	is "$output" "${verify_begin}.*"
-	is "$output" ".*${MODEL}" "verify model name"
-	is "$output" ".*--ctx-size 2048" "verify model name"
+	is "$output" ".*${MODEL_FULLNAME}" "verify model name"
+	is "$output" ".*--cache-reuse 256" "verify cache-reuse is being set"
+	assert "$output" !~ ".*--ctx-size" "assert ctx-size is not show by default"
 	assert "$output" !~ ".*--seed" "assert seed does not show by default"
+	run_ramalama -q --dryrun run ${MODEL} < /dev/null
 	assert "$output" !~ ".*-t -i" "assert -t -i not present without tty"
 
 	run_ramalama -q --dryrun run ${MODEL} "what's up doc?"
@@ -38,10 +41,11 @@ EOF
 	run_ramalama -q --dryrun run --oci-runtime foobar ${MODEL}
 	is "$output" ".*--runtime foobar" "dryrun correct with --oci-runtime"
 
-	RAMALAMA_CONFIG=/dev/null run_ramalama -q --dryrun run --seed 9876 -c 4096 --net bridge --name foobar ${MODEL}
+	RAMALAMA_CONFIG=/dev/null run_ramalama -q --dryrun run --cache-reuse 512 --seed 9876 -c 4096 --net bridge --name foobar ${MODEL}
 	is "$output" ".*--network bridge.*" "dryrun correct with --name"
-	is "$output" ".*${MODEL}" "verify model name"
+	is "$output" ".*${MODEL_FULLNAME}" "verify model name"
 	is "$output" ".*--ctx-size 4096" "verify ctx-size is set"
+	is "$output" ".*--cache-reuse 512" "verify cache-reuse is being set"
 	is "$output" ".*--temp 0.8" "verify temp is set"
 	is "$output" ".*--seed 9876" "verify seed is set"
 	if not_docker; then
@@ -90,14 +94,14 @@ EOF
 
     else
 	run_ramalama -q --dryrun run --ctx-size 4096 ${MODEL}
-	is "$output" '.*serve.*--ctx-size 4096 --temp 0.8.*' "dryrun correct"
-	is "$output" ".*--ctx-size 4096" "verify model name"
+	is "$output" '.*--ctx-size 4096.*' "verify ctx-size is set"
+	is "$output" '.*--cache-reuse 256.*' "assert cache-reuse is set by default to 256"
 
-	run_ramalama 1 run --ctx-size=4096 --name foobar ${MODEL}
+	run_ramalama 22 run --ctx-size=4096 --name foobar ${MODEL}
 	is "${lines[0]}"  "Error: --nocontainer and --name options conflict. The --name option requires a container." "conflict between nocontainer and --name line"
-	run_ramalama 1 run --name foobar ${MODEL}
+	run_ramalama 22 run --name foobar ${MODEL}
 	is "${lines[0]}"  "Error: --nocontainer and --name options conflict. The --name option requires a container." "conflict between nocontainer and --name line"
-	run_ramalama 1 run --privileged ${MODEL}
+	run_ramalama 22 run --privileged ${MODEL}
 	is "${lines[0]}"  "Error: --nocontainer and --privileged options conflict. The --privileged option requires a container." "conflict between nocontainer and --privileged line"
     fi
 }
@@ -122,34 +126,47 @@ EOF
     is "$output" ".*-e HSA_OVERRIDE_GFX_VERSION=0.0.0" "ensure HSA_OVERRIDE_GFX_VERSION is set from environment"
 }
 
-@test "ramalama run smollm with prompt" {
-    run_ramalama run --temp 0 ${MODEL} "What is the first line of the declaration of independence?"
+@test "ramalama run with prompt" {
+    run_ramalama run --runtime-args='-n 25' --temp 0 $(test_model ${MODEL}) "What is the first line of the declaration of independence?"
 }
 
 @test "ramalama run --keepalive" {
     # timeout within 1 second and generate a 124 error code.
-    run_ramalama 0 --debug run --keepalive 1s tiny
+    run_ramalama 0 --debug run --keepalive 1s $(test_model tiny)
 }
 
 @test "ramalama run --image bogus" {
     skip_if_nocontainer
     skip_if_darwin
-    skip_if_docker
+    run_ramalama pull tiny
     run_ramalama 22 run --image bogus --pull=never tiny
-    is "$output" ".*Error: bogus: image not known"
-    run_ramalama 125 run --image bogus1 --rag quay.io/ramalama/rag --pull=never tiny
-    is "$output" ".*Error: bogus1: image not known"
+    is "$output" "\(Error: bogus: image not known\|docker: Error response from daemon: No such image: bogus:latest\)"
+    is "$output" ".*Error: Failed to serve model TinyLlama-1.1B-Chat-v1.0-GGUF, for ramalama run command"
+    run_ramalama 22 run --image bogus1 --rag quay.io/ramalama/rag --pull=never tiny
+    is "$output" "\(Error: quay.io/ramalama/rag: image not known\|Error response from daemon: No such image: quay.io/ramalama/rag:latest\)"
+    is "$output" ".*Error: quay.io/ramalama/rag does not exist"
 }
 
 @test "ramalama run with rag" {
     skip_if_nocontainer
     skip_if_darwin
-    skip_if_docker
     run_ramalama --dryrun run --rag quay.io/ramalama/rag --pull=never tiny
-    is "$output" ".*quay.io/ramalama/.*-rag:"
+    is "$output" ".*quay.io/ramalama/rag"
 
     run_ramalama --dryrun run --image quay.io/ramalama/ramalama:1.0 --rag quay.io/ramalama/rag --pull=never tiny
     is "$output" ".*quay.io/ramalama/ramalama:1.0"
+}
+
+@test "ramalama --dryrun run with a device" {
+    skip_if_nocontainer
+    run_ramalama --dryrun run --device /dev/null --pull=never tiny
+    is "$output" ".*--device /dev/null .*"
+}
+
+@test "ramalama --dryrun run with no device" {
+    skip_if_nocontainer
+    run_ramalama --dryrun run --device none --pull=never tiny
+    assert "$output" != ".*--device.*"
 }
 
 # vim: filetype=sh

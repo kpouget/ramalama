@@ -18,13 +18,12 @@ load helpers
     run_ramalama -q version
     is "$output" "$version"
 
-    unset RAMALAMA_IMAGE
+    unset RAMALAMA_IMAGE RAMALAMA_IMAGES RAMALAMA_DEFAULT_IMAGE
     run_ramalama info
 
     # FIXME Engine  (podman|docker|'')
     tests="
 Image   | "quay.io/ramalama/.*"
-Runtime | "llama.cpp"
 Version | "${version}"
 Store   | \\\("${HOME}/.local/share/ramalama"\\\|"/var/lib/ramalama"\\\)
 "
@@ -39,14 +38,13 @@ Store   | \\\("${HOME}/.local/share/ramalama"\\\|"/var/lib/ramalama"\\\)
 
     image=i_$(safename):1.0
     runtime=vllm
-    engine=e_$(safename)
+    engine=podman
     store=s_$(safename)
 
     RAMALAMA_IMAGE=$image run_ramalama --store $store --runtime $runtime --engine $engine info
     tests="
 Engine.Name | $engine
 Image   | $image
-Runtime | $runtime
 Store   | $(pwd)/$store
 "
 

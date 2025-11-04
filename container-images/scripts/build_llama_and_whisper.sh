@@ -1,5 +1,8 @@
 #!/bin/bash
 
+DEFAULT_LLAMA_CPP_COMMIT="b52edd25586fabb70f0c21b274473b307cf14499"
+DEFAULT_WHISPER_COMMIT="c62adfbd1ecdaea9e295c72d672992514a2d887c"
+
 python_version() {
   local pyversion
   pyversion=$(python3 --version)
@@ -23,6 +26,7 @@ dnf_install_remoting() {
 
 dnf_install_intel_gpu() {
   local intel_rpms=("intel-oneapi-mkl-sycl-devel" "intel-oneapi-dnnl-devel"
+    "intel-oneapi-mkl-devel" "intel-oneapi-mkl-sycl-distributed-dft-devel"
     "intel-oneapi-compiler-dpcpp-cpp" "intel-level-zero"
     "oneapi-level-zero" "oneapi-level-zero-devel" "intel-compute-runtime")
   dnf install -y "${intel_rpms[@]}"
@@ -72,17 +76,17 @@ dnf_install_rocm() {
   rm_non_ubi_repos
 }
 
-dnf_install_s390() {
-  # I think this was for s390, maybe ppc also
+dnf_install_s390_ppc64le() {
   dnf install -y "openblas-devel"
 }
 
 dnf_install_mesa() {
   if [ "${ID}" = "fedora" ]; then
     dnf copr enable -y slp/mesa-libkrun-vulkan
-    dnf install -y mesa-vulkan-drivers-25.0.7-101.fc42 virglrenderer \
-      "${vulkan_rpms[@]}"
-    dnf versionlock add mesa-vulkan-drivers-25.0.7-101.fc42
+    dnf install -y mesa-vulkan-drivers-25.2.3-101.fc42 virglrenderer \
+	"${vulkan_rpms[@]}"
+    dnf versionlock add mesa-vulkan-drivers-25.2.3-101.fc42
+
   elif [ "${ID}" = "openEuler" ]; then
     dnf install -y mesa-vulkan-drivers virglrenderer "${vulkan_rpms[@]}"
   else # virglrenderer not available on RHEL or EPEL
@@ -132,7 +136,7 @@ dnf_install() {
     if [ "$uname_m" = "x86_64" ] || [ "$uname_m" = "aarch64" ]; then
       dnf_install_mesa # on x86_64 and aarch64 we use vulkan via mesa
     else
-      dnf_install_s390
+      dnf_install_s390_ppc64le
     fi
   elif [[ "$containerfile" = rocm* ]]; then
     dnf_install_rocm
@@ -190,14 +194,19 @@ setup_build_env() {
 }
 
 cmake_steps() {
-  local cmake_flags=("$@")
-  cmake -B build "${cmake_flags[@]}" 2>&1 | cmake_check_warnings
-  local build_config=Release
-  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
-      build_config=Debug
-  fi
-  cmake --build build --config "$build_config" -j"$(nproc)" 2>&1 | cmake_check_warnings
-  cmake --install build 2>&1 | cmake_check_warnings
+  (
+    # This makes llama.cpp build a generic binary, similar to an rpm build
+    SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+    export SOURCE_DATE_EPOCH
+    local cmake_flags=("$@")
+    cmake -B build "${cmake_flags[@]}" 2>&1 | cmake_check_warnings
+    local build_config=Release
+    if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
+        build_config=Debug
+    fi
+    cmake --build build --config "$build_config" -j"$(nproc)" 2>&1 | cmake_check_warnings
+    cmake --install build 2>&1 | cmake_check_warnings
+  )
 }
 
 set_install_prefix() {
@@ -209,7 +218,7 @@ set_install_prefix() {
 }
 
 configure_common_flags() {
-  common_flags=("-DGGML_NATIVE=OFF")
+  common_flags=()
   if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
       common_flags+=("-DGGML_CMAKE_BUILD_TYPE=Debug")
   else
@@ -246,7 +255,6 @@ configure_common_flags() {
 }
 
 clone_and_build_whisper_cpp() {
-  local DEFAULT_WHISPER_COMMIT="d0a9d8c7f8f7b91c51d77bbaa394b915f79cde6b"
   local whisper_cpp_commit="${WHISPER_CPP_PULL_REF:-$DEFAULT_WHISPER_COMMIT}"
   local whisper_flags=("${common_flags[@]}")
   whisper_flags+=("-DBUILD_SHARED_LIBS=OFF")
@@ -265,7 +273,6 @@ clone_and_build_whisper_cpp() {
 }
 
 clone_and_build_llama_cpp() {
-  local DEFAULT_LLAMA_CPP_COMMIT=1d72c841888b9450916bdd5a9b3274da380f5b36
   local llama_cpp_commit="${LLAMA_CPP_PULL_REF:-$DEFAULT_LLAMA_CPP_COMMIT}"
   local install_prefix
   install_prefix=$(set_install_prefix)
@@ -314,9 +321,8 @@ add_common_flags() {
   ramalama)
     if [ "$uname_m" = "x86_64" ] || [ "$uname_m" = "aarch64" ]; then
       common_flags+=("-DGGML_VULKAN=ON")
-    elif [ "$uname_m" = "s390x" ]; then
-      common_flags+=("-DGGML_VXE=ON" "-DGGML_BLAS=ON")
-      common_flags+=("-DGGML_BLAS_VENDOR=OpenBLAS")
+    elif [ "$uname_m" = "s390x" ] || [ "$uname_m" = "ppc64le" ]; then
+      common_flags+=("-DGGML_BLAS=ON" "-DGGML_BLAS_VENDOR=OpenBLAS")
     fi
     ;;
   esac

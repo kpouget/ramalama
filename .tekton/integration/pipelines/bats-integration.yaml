@@ -5,6 +5,8 @@ metadata:
 spec:
   description: |
     Test the newly-built ramalama image and layered images on all supported architectures.
+    If the tests succeed, push the images to the public repos. If the tests were triggered by
+    pushing a tag to the git repo, apply floating tags to the pushed images.
   params:
   - name: SNAPSHOT
     description: >-
@@ -15,11 +17,13 @@ spec:
     default:
     - linux-c8xlarge/amd64
     - linux-c8xlarge/arm64
+    - linux/ppc64le
+    - linux-g64xlarge/amd64
   - name: commands
     description: Test commands to run
     type: array
     default:
-    - make bats
+    - bash -cx "bin/ramalama info && make bats"
   - name: git-url
     description: URL of the Git repository containing pipeline and task definitions
     default: https://github.com/containers/ramalama.git
@@ -64,8 +68,13 @@ spec:
       value: $(tasks.init.results.bats-image)
     - name: envs
       value:
-      - RAMALAMA_IMAGE=$(tasks.init.results.ramalama-image)
+      - RAMALAMA_DEFAULT_IMAGE="$(tasks.init.results.ramalama-image)"
+      - RAMALAMA_DEFAULT_RAG_IMAGE="$(tasks.init.results.ramalama-rag-image)"
       - RAMALAMA_STACK_IMAGE=$(tasks.init.results.stack-image)
+      - >-
+        RAMALAMA_IMAGES='{"CUDA_VISIBLE_DEVICES": "$(tasks.init.results.cuda-image)"}'
+      - >-
+        RAMALAMA_RAG_IMAGES='{"CUDA_VISIBLE_DEVICES": "$(tasks.init.results.cuda-rag-image)"}'
     taskRef:
       resolver: git
       params:
@@ -85,6 +94,10 @@ spec:
       value: $(params.SNAPSHOT)
     - name: event-type
       value: $(tasks.init.results.event-type)
+    - name: snapshot-type
+      value: $(tasks.init.results.snapshot-type)
+    - name: release-tags
+      value: $(tasks.init.results.release-tags)
     - name: sync
       value: $(tasks.init.results.sync)
     - name: repo-prefix

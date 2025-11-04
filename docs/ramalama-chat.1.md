@@ -17,7 +17,7 @@ Chat with an OpenAI Rest API
 
 #### **--api-key**
 OpenAI-compatible API key.
-Can also be set via the API_KEY environment variable.
+Can also be set via the RAMALAMA_API_KEY environment variable.
 
 #### **--color**
 Indicate whether or not to use color in the chat.
@@ -28,6 +28,11 @@ Show this help message and exit
 
 #### **--list**
 List the available models at an endpoint
+
+#### **--mcp**=SERVER_URL
+MCP (Model Context Protocol) servers to use for enhanced tool calling capabilities.
+Can be specified multiple times to connect to multiple MCP servers.
+Each server provides tools that can be automatically invoked during chat conversations.
 
 #### **--model**=MODEL
 Model for inferencing (may not be required for endpoints that only serve one model)

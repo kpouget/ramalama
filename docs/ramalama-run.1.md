@@ -14,6 +14,7 @@ ramalama\-run - run specified AI Model as a chatbot
 | HuggingFace   | huggingface://, hf://, hf.co/ | [`huggingface.co`](https://www.huggingface.co)|
 | ModelScope    | modelscope://, ms:// | [`modelscope.cn`](https://modelscope.cn/)|
 | Ollama        | ollama:// | [`ollama.com`](https://www.ollama.com)|
+| rlcr          | rlcr://   | [`ramalama.com`](https://registry.ramalama.com/projects/ramalama) |
 | OCI Container Registries | oci:// | [`opencontainers.org`](https://opencontainers.org)|
 |||Examples: [`quay.io`](https://quay.io),  [`Docker Hub`](https://docker.io),[`Artifactory`](https://artifactory.com)|
 
@@ -33,12 +34,15 @@ The default can be overridden in the ramalama.conf file.
 #### **--authfile**=*password*
 path of the authentication file for OCI registries
 
+#### **--cache-reuse**=256
+Min chunk size to attempt reusing from the cache via KV shifting
+
 #### **--color**
 Indicate whether or not to use color in the chat.
 Possible values are "never", "always" and "auto". (default: auto)
 
 #### **--ctx-size**, **-c**
-size of the prompt context. This option is also available as **--max-model-len**. Applies to llama.cpp and vllm regardless of alias (default: 2048, 0 = loaded from model)
+size of the prompt context. This option is also available as **--max-model-len**. Applies to llama.cpp and vllm regardless of alias (default: 4096, 0 = loaded from model)
 
 #### **--device**
 Add a host device to the container. Optional permissions parameter  can
@@ -48,6 +52,9 @@ write, and m for mknod(2).
 Example: --device=/dev/dri/renderD128:/dev/xvdc:rwm
 
 The device specification is passed directly to the underlying container engine.  See documentation of the supported container engine for more information.
+
+Pass '--device=none' explicitly add no device to the container, eg for
+running a CPU-only performance comparison.
 
 #### **--env**=
 
@@ -66,7 +73,7 @@ OCI container image to run with specified AI model. RamaLama defaults to using
 images based on the accelerator it discovers. For example:
 `quay.io/ramalama/ramalama`. See the table below for all default images.
 The default image tag is based on the minor version of the RamaLama package.
-Version 0.12.1 of RamaLama pulls an image with a `:0.12` tag from the quay.io/ramalama OCI repository. The --image option overrides this default.
+Version 0.14.0 of RamaLama pulls an image with a `:0.14` tag from the quay.io/ramalama OCI repository. The --image option overrides this default.
 
 The default can be overridden in the ramalama.conf file or via the
 RAMALAMA_IMAGE environment variable. `export RAMALAMA_IMAGE=quay.io/ramalama/aiimage:1.2` tells
@@ -91,6 +98,18 @@ If GPU device on host system is accessible to user via group access, this option
 #### **--keepalive**
 duration to keep a model loaded (e.g. 5m)
 
+#### **--max-tokens**=*integer*
+Maximum number of tokens to generate. Set to 0 for unlimited output (default: 0).
+This parameter is mapped to the appropriate runtime-specific parameter:
+- llama.cpp: `-n` parameter
+- MLX: `--max-tokens` parameter
+- vLLM: `--max-tokens` parameter
+
+#### **--mcp**=SERVER_URL
+MCP (Model Context Protocol) servers to use for enhanced tool calling capabilities.
+Can be specified multiple times to connect to multiple MCP servers.
+Each server provides tools that can be automatically invoked during chat conversations.
+
 #### **--name**, **-n**
 name of the container to run the Model in
 
@@ -109,6 +128,9 @@ use. Using this option RamaLama will override these defaults.
 
 On Nvidia based GPU systems, RamaLama defaults to using the
 `nvidia-container-runtime`. Use this option to override this selection.
+
+#### **--port**, **-p**=*port*
+Port for AI Model server to listen on (default: 8080)
 
 #### **--prefix**
 Prefix for the user prompt (default: 🦭 > )
@@ -141,6 +163,10 @@ Pull image policy. The default is **missing**.
 
 #### **--rag**=
 Specify path to Retrieval-Augmented Generation (RAG) database or an OCI Image containing a RAG database
+
+#### **--rag-image**=
+The image to use to process the RAG database specified by the `--rag` option. The image must contain the `/usr/bin/rag_framework` executable, which
+will create a proxy which embellishes client requests with RAG data before passing them on to the LLM, and returns the responses.
 
 #### **--runtime-args**="*args*"
 Add *args* to the runtime (llama.cpp or vllm) invocation.
@@ -188,6 +214,12 @@ ramalama run granite
 Run command with local downloaded model for 10 minutes
 ```
 ramalama run --keepalive 10m file:///tmp/mymodel
+>
+```
+
+Run command with a custom port to allow multiple models running simultaneously
+```
+ramalama run --port 8081 granite
 >
 ```
 
