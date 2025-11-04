@@ -65,18 +65,26 @@ The ramalama table contains settings to configure and manage the OCI runtime.
 Unified API layer for Inference, RAG, Agents, Tools, Safety, Evals, and Telemetry.
 Options: llama-stack, none
 
+**api_key**=""
+
+OpenAI-compatible API key. Can also be set via the RAMALAMA_API_KEY environment variable.
+
 **carimage**="registry.access.redhat.com/ubi10-micro:latest"
 
 OCI model car image
 
 Image to be used when building and pushing --type=car models
 
+**cache_reuse**=256
+
+Min chunk size to attempt reusing from the cache via KV shifting
+
 **container**=true
 
 Run RamaLama in the default container.
 RAMALAMA_IN_CONTAINER environment variable overrides this field.
 
-**ctx_size**=2048
+**ctx_size**=0
 
 Size of the prompt context (0 = loaded from model)
 
@@ -89,6 +97,11 @@ Environment variables to be added to the environment used when running in a cont
 Run RamaLama using the specified container engine.
 Valid options are: Podman and Docker
 This field can be overridden by the RAMALAMA_CONTAINER_ENGINE environment variable.
+
+**#gguf_quantization_mode**="Q4_K_M"
+
+The quantization mode used when creating OCI formatted AI Models.
+Available options: Q2_K, Q3_K_S, Q3_K_M, Q3_K_L, Q4_0, Q4_K_S, Q4_K_M, Q5_0, Q5_K_S, Q5_K_M, Q6_K, Q8_0.
 
 **host**="0.0.0.0"
 
@@ -106,13 +119,20 @@ RAMALAMA_IMAGE environment variable overrides this field.
   INTEL_VISIBLE_DEVICES  = "quay.io/ramalama/intel-gpu"
   ASCEND_VISIBLE_DEVICES = "quay.io/ramalama/cann"
   MUSA_VISIBLE_DEVICES   = "quay.io/ramalama/musa"
+  VLLM                   = "registry.redhat.io/rhelai1/ramalama-vllm"
 
-Alternative images to use when RamaLama recognizes specific hardware
+Alternative images to use when RamaLama recognizes specific hardware or user
+specified vllm model runtime.
 
 **keep_groups**=false
 
 Pass `--group-add keep-groups` to podman, when using podman.
 In some cases this is needed to access the gpu from a rootless container
+
+**max_tokens**=0
+
+Maximum number of tokens to generate. Set to 0 for unlimited output (default: 0).
+This parameter is mapped to the appropriate runtime-specific parameter when executing models.
 
 **ngl**=-1
 

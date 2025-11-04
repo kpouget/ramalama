@@ -134,6 +134,7 @@ def migrate_reffile_to_refjsonfile(ref_file_path: str, snapshot_directory: str) 
 
 class StoreFileType(StrEnum):
     GGUF_MODEL = "gguf"
+    SAFETENSOR_MODEL = "safetensor"
     MMPROJ = "mmproj"
     CHAT_TEMPLATE = "chat_template"
     OTHER = "other"
@@ -142,6 +143,8 @@ class StoreFileType(StrEnum):
     def from_str(s: str) -> "StoreFileType":
         if s == StoreFileType.GGUF_MODEL.value:
             return StoreFileType.GGUF_MODEL
+        if s == StoreFileType.SAFETENSOR_MODEL.value:
+            return StoreFileType.SAFETENSOR_MODEL
         if s == StoreFileType.MMPROJ.value:
             return StoreFileType.MMPROJ
         if s == StoreFileType.CHAT_TEMPLATE.value:
@@ -162,7 +165,7 @@ class RefJSONFile:
     path: str
     files: list[StoreFile]
 
-    version: str = "v1.0"
+    version: str = "v1.0.1"
 
     def to_json(self) -> str:
         return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=2)
@@ -175,6 +178,10 @@ class RefJSONFile:
     @property
     def model_files(self) -> list[StoreFile]:
         return [file for file in self.files if file.type == StoreFileType.GGUF_MODEL]
+
+    @property
+    def safetensor_model_files(self) -> list[StoreFile]:
+        return [file for file in self.files if file.type == StoreFileType.SAFETENSOR_MODEL]
 
     @property
     def chat_templates(self) -> list[StoreFile]:

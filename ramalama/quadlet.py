@@ -2,7 +2,7 @@ import os
 import shlex
 from typing import Optional, Tuple
 
-from ramalama.common import MNT_DIR, RAG_DIR, get_accel_env_vars
+from ramalama.common import MNT_DIR, RAG_DIR, get_accel, get_accel_env_vars
 from ramalama.file import UnitFile
 
 
@@ -56,6 +56,8 @@ class Quadlet:
         quadlet_file.add("Container", "AddDevice", "-/dev/accel")
         quadlet_file.add("Container", "AddDevice", "-/dev/dri")
         quadlet_file.add("Container", "AddDevice", "-/dev/kfd")
+        if get_accel() == "cuda":
+            quadlet_file.add("Container", "AddDevice", "nvidia.com/gpu=all")
         quadlet_file.add("Container", "Image", f"{self.image}")
         quadlet_file.add("Container", "RunInit", "true")
         quadlet_file.add("Container", "Environment", "HOME=/tmp")
@@ -163,15 +165,15 @@ class Quadlet:
         if not getattr(self.args, "rag", None):
             return files
 
-        rag_volume_file_name = f"{self.rag_name}.volume"
+        rag_volume_file_name = f"{self.rag_name.replace(':', '-')}.volume"
         print(f"Generating quadlet file: {rag_volume_file_name} ")
 
         volume_file = UnitFile(rag_volume_file_name)
         volume_file.add("Volume", "Driver", "image")
-        volume_file.add("Volume", "Image", f"{self.rag_name}.image")
+        volume_file.add("Volume", "Image", f"{self.rag_name.replace(':', '-')}.image")
         files.append(volume_file)
 
-        files.append(self._gen_image(self.rag_name, self.rag))
+        files.append(self._gen_image(self.rag_name.replace(':', '-'), self.rag))
 
         quadlet_file.add("Container", "Mount", f"type=image,source={self.rag},destination={RAG_DIR},readwrite=false")
         return files

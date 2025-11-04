@@ -17,9 +17,11 @@ from ramalama.arg_types import ChatArgsType
 from ramalama.common import perror
 from ramalama.config import CONFIG
 from ramalama.console import EMOJI, should_colorize
-from ramalama.engine import dry_run, stop_container
+from ramalama.engine import stop_container
 from ramalama.file_loaders.file_manager import OpanAIChatAPIMessageBuilder
 from ramalama.logger import logger
+from ramalama.mcp.mcp_agent import LLMAgent
+from ramalama.mcp.mcp_client import PureMCPClient
 
 
 def res(response, color):
@@ -34,8 +36,11 @@ def res(response, color):
     for line in response:
         line = line.decode("utf-8").strip()
         if line.startswith("data: {"):
-            line = line[len("data: ") :]
-            choice = json.loads(line)["choices"][0]["delta"]
+            choice = ""
+
+            json_line = json.loads(line[len("data: ") :])
+            if "choices" in json_line and json_line["choices"]:
+                choice = json_line["choices"][0]["delta"]
             if "content" in choice:
                 choice = choice["content"]
             else:
@@ -102,10 +107,12 @@ class RamaLamaShell(cmd.Cmd):
         self.prompt = args.prefix
         self.url = f"{args.url}/chat/completions"
         self.prep_rag_message()
+        self.mcp_agent: LLMAgent | None = None
+        self.initialize_mcp()
 
         self.operational_args = operational_args
 
-        self.content = []
+        self.content: list[str] = []
 
     def prep_rag_message(self):
         if (context := self.args.rag) is None:
@@ -114,6 +121,130 @@ class RamaLamaShell(cmd.Cmd):
         builder = OpanAIChatAPIMessageBuilder()
         messages = builder.load(context)
         self.conversation_history.extend(messages)
+
+    def initialize_mcp(self):
+        """Initialize MCP servers if specified."""
+        if not hasattr(self.args, 'mcp') or not self.args.mcp:
+            return
+
+        try:
+            # Create clients for each MCP server URL
+            clients = []
+            for url in self.args.mcp:
+                try:
+                    clients.append(PureMCPClient(url))
+                    logger.debug(f"Created MCP client for {url}")
+                except Exception as e:
+                    perror(f"Failed to create MCP client for {url}: {e}")
+
+            if clients:
+                # Use the same LLM URL as the chat for the agent
+                llm_url = self.args.url
+                self.mcp_agent = LLMAgent(clients, llm_url, self.args.model, self.args)
+
+                # Set up proper streaming callback for MCP agent
+                def mcp_stream_callback(text):
+                    color_default = ""
+                    color_yellow = ""
+                    if (self.args.color == "auto" and should_colorize()) or self.args.color == "always":
+                        color_default = "\033[0m"
+                        color_yellow = "\033[33m"
+                    print(f"{color_yellow}{text}{color_default}", end="", flush=True)
+
+                self.mcp_agent._stream_callback = mcp_stream_callback
+
+                # Initialize the agent and get available tools
+                init_results, tools = self.mcp_agent.initialize()
+
+                # Show connection summary (simplified)
+                for i, result in enumerate(init_results):
+                    server_name = result['result']['serverInfo']['name']
+                    server_tools = [tool for tool in tools if tool.get('server') == server_name]
+                    logger.debug(f"Connected to: {server_name}")
+                    print(f"Found {len(server_tools)} tool(s) from {server_name}")
+
+                print("\nUsage:")
+                print("  - Ask questions naturally (automatic tool selection)")
+                print("  - Use '/tool [question]' to manually select which tool to use")
+                print("  - Use '/bye' or 'exit' to quit")
+
+        except Exception as e:
+            perror(f"Failed to initialize MCP: {e}")
+            logger.debug(f"MCP initialization error: {e}", exc_info=True)
+
+    def _should_use_mcp(self, content: str) -> bool:
+        """Determine if the request should be handled by MCP tools."""
+        if not self.mcp_agent:
+            return False
+        return self.mcp_agent.should_use_tools(content, self.conversation_history)
+
+    def _handle_mcp_request(self, content: str) -> str:
+        """Handle a request using MCP tools (multi-tool capable, automatic)."""
+        try:
+            assert self.mcp_agent
+            # Automatic tool selection and argument generation
+            results = self.mcp_agent.execute_task(content, manual=False, stream=True)
+
+            # When streaming, results will be None since output is streamed directly
+            if results is None:
+                return ""  # Return empty string since content was already streamed
+            # If multiple tools ran, join results into a single answer
+            elif isinstance(results, list):
+                combined = "\n\n".join(f"🔧 {r['tool']}: {r['output']}" for r in results)
+                return f"Multi-tool execution:\n{combined}"
+            else:
+                return results
+        except Exception as e:
+            logger.debug(f"MCP request handling error: {e}", exc_info=True)
+            return f"Error using MCP tools: {e}"
+
+    def _handle_manual_tool_selection(self, content: str):
+        if not self.mcp_agent or not self.mcp_agent.available_tools:
+            print("No MCP tools available.")
+            return
+
+        parts = content.strip().split(None, 1)
+        question = parts[1] if len(parts) > 1 else ""
+
+        selected_tools = self._select_tools()
+        if not selected_tools:
+            return
+
+        responses = []
+        for tool in selected_tools:
+            response = self.mcp_agent.execute_specific_tool(question, tool['name'], manual=False)
+            responses.append({"tool": tool['name'], "output": response})
+
+        # Display results
+        for r in responses:
+            print(f"\n {r['tool']} -> {r['output']}")
+
+        # Save to history
+        self.conversation_history.append({"role": "user", "content": f"/tool {question}"})
+        self.conversation_history.append({"role": "assistant", "content": str(responses)})
+
+    def _select_tools(self):
+        """Interactive multi-tool selection without prompting for arguments."""
+        if not self.mcp_agent or not self.mcp_agent.available_tools:
+            return None
+
+        self.mcp_agent.print_tools()
+
+        try:
+            choice = input("\nSelect tool(s) (e.g. 1,2,3) or 'q' to cancel: ").strip()
+            if choice.lower() == 'q':
+                return None
+
+            indices = [int(c.strip()) - 1 for c in choice.split(",")]
+            selected = [
+                self.mcp_agent.available_tools[i] for i in indices if 0 <= i < len(self.mcp_agent.available_tools)
+            ]
+
+            return selected
+
+        except (ValueError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return None
 
     def handle_args(self):
         prompt = " ".join(self.args.ARGS) if self.args.ARGS else None
@@ -145,13 +276,28 @@ class RamaLamaShell(cmd.Cmd):
 
         content = "\n".join(self.content)
         self.content = []
+
+        # Check for manual tool selection command FIRST
+        if self.mcp_agent and content.strip().startswith("/tool"):
+            self._handle_manual_tool_selection(content)
+            return False
+
+        # Check if MCP agent should handle this request
+        if self.mcp_agent and self._should_use_mcp(content):
+            response = self._handle_mcp_request(content)
+            if response:
+                # If streaming, _handle_mcp_request already printed output
+                if isinstance(response, str) and response.strip():
+                    print(response)
+                self.conversation_history.append({"role": "user", "content": content})
+                self.conversation_history.append({"role": "assistant", "content": response})
+            return False
+
         self.conversation_history.append({"role": "user", "content": content})
         self.request_in_process = True
         response = self._req()
-        if not response:
-            return True
-
-        self.conversation_history.append({"role": "assistant", "content": response})
+        if response:
+            self.conversation_history.append({"role": "assistant", "content": response})
         self.request_in_process = False
 
     def _make_request_data(self):
@@ -159,7 +305,12 @@ class RamaLamaShell(cmd.Cmd):
             "stream": True,
             "messages": self.conversation_history,
         }
-        if self.args.model is not None:
+        if getattr(self.args, "temp", None):
+            data["temperature"] = float(self.args.temp)
+        if getattr(self.args, "max_tokens", None):
+            data["max_completion_tokens"] = self.args.max_tokens
+        # For MLX runtime, omit explicit model to allow server default ("default_model")
+        if getattr(self.args, "runtime", None) != "mlx" and self.args.model is not None:
             data["model"] = self.args.model
 
         json_data = json.dumps(data).encode("utf-8")
@@ -212,6 +363,15 @@ class RamaLamaShell(cmd.Cmd):
         return None
 
     def kills(self):
+        # Clean up MCP connections first
+        if self.mcp_agent:
+            try:
+                for client in self.mcp_agent.clients:
+                    client.close()
+                logger.debug("Closed MCP connections")
+            except Exception as e:
+                logger.debug(f"Error closing MCP connections: {e}")
+
         # Don't kill the server if we're still in the initial connection phase
         if getattr(self.args, "initial_connection", False):
             return
@@ -224,6 +384,8 @@ class RamaLamaShell(cmd.Cmd):
             args = copy.copy(self.args)
             args.ignore = True
             stop_container(args, self.args.name)
+            if extra_name := self.operational_args.name:
+                stop_container(args, extra_name)
 
     def loop(self):
         while True:
@@ -251,14 +413,15 @@ def alarm_handler(signum, frame):
     raise TimeoutException()
 
 
-def chat(args: ChatArgsType, operational_args: ChatOperationalArgs = ChatOperationalArgs()):
+def chat(args: ChatArgsType, operational_args: ChatOperationalArgs | None = None):
     if args.dryrun:
-        prompt = dry_run(args.ARGS)
+        assert args.ARGS is not None
+        prompt = " ".join(args.ARGS)
         print(f"\nramalama chat --color {args.color} --prefix  \"{args.prefix}\" --url {args.url} {prompt}")
         return
     if getattr(args, "keepalive", False):
         signal.signal(signal.SIGALRM, alarm_handler)
-        signal.alarm(convert_to_seconds(args.keepalive))
+        signal.alarm(convert_to_seconds(args.keepalive))  # type: ignore
 
     list_models = getattr(args, "list", False)
     if list_models:
@@ -270,7 +433,6 @@ def chat(args: ChatArgsType, operational_args: ChatOperationalArgs = ChatOperati
             ids = [model["id"] for model in data.get("data", [])]
             for id in ids:
                 print(id)
-
     try:
         shell = RamaLamaShell(args, operational_args)
         if shell.handle_args():

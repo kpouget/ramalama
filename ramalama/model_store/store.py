@@ -6,11 +6,11 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
-import ramalama.model_store.go2jinja as go2jinja
 from ramalama.common import perror, sanitize_filename, verify_checksum
 from ramalama.endian import EndianMismatchError, get_system_endianness
 from ramalama.logger import logger
 from ramalama.model_inspect.gguf_parser import GGUFInfoParser, GGUFModelInfo
+from ramalama.model_store import go2jinja
 from ramalama.model_store.constants import DIRECTORY_NAME_BLOBS, DIRECTORY_NAME_REFS, DIRECTORY_NAME_SNAPSHOTS
 from ramalama.model_store.global_store import GlobalModelStore
 from ramalama.model_store.reffile import RefJSONFile, StoreFile, StoreFileType, migrate_reffile_to_refjsonfile
@@ -20,18 +20,22 @@ from ramalama.model_store.snapshot_file import (
     SnapshotFileType,
     validate_snapshot_files,
 )
+from ramalama.model_store.template_conversion import (
+    TemplateConversionError,
+    convert_go_to_jinja,
+    ensure_jinja_openai_compatibility,
+    is_openai_jinja,
+)
 
 
 def map_to_store_file_type(snapshot_type: SnapshotFileType) -> StoreFileType:
-    ftype = StoreFileType.OTHER
-    if snapshot_type == SnapshotFileType.Model:
-        ftype = StoreFileType.GGUF_MODEL
-    if snapshot_type == SnapshotFileType.ChatTemplate:
-        ftype = StoreFileType.CHAT_TEMPLATE
-    if snapshot_type == SnapshotFileType.Mmproj:
-        ftype = StoreFileType.MMPROJ
-
-    return ftype
+    mapping = {
+        SnapshotFileType.GGUFModel: StoreFileType.GGUF_MODEL,
+        SnapshotFileType.ChatTemplate: StoreFileType.CHAT_TEMPLATE,
+        SnapshotFileType.Mmproj: StoreFileType.MMPROJ,
+        SnapshotFileType.SafetensorModel: StoreFileType.SAFETENSOR_MODEL,
+    }
+    return mapping.get(snapshot_type, StoreFileType.OTHER)
 
 
 class ModelStore:
@@ -87,14 +91,16 @@ class ModelStore:
 
     def get_ref_file(self, model_tag: str) -> Optional[RefJSONFile]:
         ref_file_path = self.get_ref_file_path(model_tag)
-        ref = migrate_reffile_to_refjsonfile(ref_file_path, self.snapshots_directory)
-        if ref is not None:
-            return ref
-
-        if not os.path.exists(ref_file_path):
-            return None
-
-        return RefJSONFile.from_path(ref_file_path)
+        ref_file = migrate_reffile_to_refjsonfile(ref_file_path, self.snapshots_directory)
+        if ref_file is None:
+            if os.path.exists(ref_file_path):
+                ref_file = RefJSONFile.from_path(ref_file_path)
+        if ref_file is not None:
+            if ref_file.version != RefJSONFile.version:
+                # 0.13.0 chat template conversion logic was wrong, force a refresh
+                ref_file.version = RefJSONFile.version
+                self._ensure_chat_template(ref_file, snapshot_hash=ref_file.hash)
+        return ref_file
 
     def update_ref_file(
         self, model_tag: str, snapshot_hash: str = "", snapshot_files: Optional[list[SnapshotFile]] = None
@@ -135,6 +141,17 @@ class ModelStore:
     def get_blob_file_path(self, file_hash: str) -> str:
         return os.path.join(self.blobs_directory, sanitize_filename(file_hash))
 
+    def get_safetensor_blob_path(self, model_tag: str, requested_filename: str) -> Optional[str]:
+        ref_file = self.get_ref_file(model_tag)
+        if ref_file is None:
+            return None
+        safetensor_files = ref_file.safetensor_model_files
+        if not safetensor_files:
+            return None
+        matched = next((f for f in safetensor_files if f.name == requested_filename), None)
+        chosen = matched if matched is not None else safetensor_files[0]
+        return self.get_blob_file_path(chosen.hash)
+
     def get_blob_file_path_by_name(self, tag_hash: str, filename: str) -> str:
         return str(Path(self.get_snapshot_file_path(tag_hash, filename)).resolve())
 
@@ -163,6 +180,16 @@ class ModelStore:
         if ref_file is None:
             return ("", cached_files, False)
 
+        # TODO: Remove in following releases
+        # Temporary migration of .safetensors model files which were previously stored as OTHER
+        should_write = False
+        for file in ref_file.files:
+            if file.name.endswith(".safetensors") and file.type != StoreFileType.SAFETENSOR_MODEL:
+                file.type = StoreFileType.SAFETENSOR_MODEL
+                should_write = True
+        if should_write:
+            ref_file.write_to_file()
+
         for file in ref_file.files:
             path = self.get_blob_file_path(file.hash)
             if os.path.exists(path):
@@ -170,7 +197,9 @@ class ModelStore:
 
         return (ref_file.hash, cached_files, len(cached_files) == len(ref_file.files))
 
-    def _prepare_new_snapshot(self, model_tag: str, snapshot_hash: str, snapshot_files: list[SnapshotFile]):
+    def _prepare_new_snapshot(
+        self, model_tag: str, snapshot_hash: str, snapshot_files: list[SnapshotFile]
+    ) -> RefJSONFile:
         validate_snapshot_files(snapshot_files)
         self.ensure_directory_setup()
 
@@ -184,12 +213,11 @@ class ModelStore:
 
         snapshot_directory = self.get_snapshot_directory(snapshot_hash)
         os.makedirs(snapshot_directory, exist_ok=True)
+        return ref_file
 
-    def _download_snapshot_files(self, model_tag: str, snapshot_hash: str, snapshot_files: Sequence[SnapshotFile]):
-        ref_file: None | RefJSONFile = self.get_ref_file(model_tag)
-        if ref_file is None:
-            raise ValueError("Cannot download snapshots without a valid ref file.")
-
+    def _download_snapshot_files(
+        self, ref_file: RefJSONFile, snapshot_hash: str, snapshot_files: Sequence[SnapshotFile]
+    ):
         for file in snapshot_files:
             dest_path = self.get_blob_file_path(file.hash)
             blob_relative_path = ""
@@ -222,64 +250,81 @@ class ModelStore:
         # save updated ref file
         ref_file.write_to_file()
 
-    def _ensure_chat_template(self, model_tag: str, snapshot_hash: str, snapshot_files: list[SnapshotFile]):
-        model_file: SnapshotFile | None = None
-        for file in snapshot_files:
-            # Give preference to a chat template that has been specified in the file list
-            if file.type == SnapshotFileType.ChatTemplate:
-                chat_template_file_path = self.get_blob_file_path(file.hash)
-                chat_template = ""
-                with open(chat_template_file_path, "r") as template_file:
-                    chat_template = template_file.read()
+    def _try_convert_existing_chat_template(self, ref_file: RefJSONFile, snapshot_hash: str) -> bool:
+        for file in ref_file.chat_templates:
+            chat_template_file_path = self.get_blob_file_path(file.hash)
+            with open(chat_template_file_path, "r") as template_file:
+                chat_template = template_file.read()
 
-                if not go2jinja.is_go_template(chat_template):
-                    return
-
+            if not go2jinja.is_go_template(chat_template):
+                if is_openai_jinja(chat_template):
+                    return True
+                else:
+                    normalized_template = ensure_jinja_openai_compatibility(chat_template)
+            else:
                 try:
-                    jinja_template = go2jinja.go_to_jinja(chat_template)
-                    files = [
-                        LocalSnapshotFile(jinja_template, "chat_template_converted", SnapshotFileType.ChatTemplate)
-                    ]
-                    self.update_snapshot(model_tag, snapshot_hash, files)
-                except Exception as ex:
-                    logger.debug(f"Failed to convert Go Template to Jinja: {ex}")
-                return
-            if file.type == SnapshotFileType.Model:
-                model_file = file
+                    normalized_template = convert_go_to_jinja(chat_template)
+                except TemplateConversionError as e:
+                    logger.debug(f"Failed to convert template: {e}")
+                    continue
 
-        # Could not find model file in store
-        if model_file is None:
+            files = [LocalSnapshotFile(normalized_template, "chat_template_converted", SnapshotFileType.ChatTemplate)]
+            self._update_snapshot(ref_file, snapshot_hash, files)
+            return True
+
+        return False
+
+    def _ensure_chat_template(self, ref_file: RefJSONFile, snapshot_hash: str):
+        # Give preference to the embedded chat template as it's most likely to be
+        # compatible with llama.cpp
+
+        def get_embedded_template() -> str | None:
+            models = ref_file.model_files
+            if not models:
+                return None
+
+            # Only the first model file is considered for chat template extraction
+            model_file_path = self.get_blob_file_path(models[0].hash)
+            if not GGUFInfoParser.is_model_gguf(model_file_path):
+                return None
+
+            # Parse model, first and second parameter are irrelevant here
+            info: GGUFModelInfo = GGUFInfoParser.parse("model", "registry", model_file_path)
+            return info.get_chat_template()
+
+        tmpl = get_embedded_template()
+
+        if tmpl is None:
+            self._try_convert_existing_chat_template(ref_file, snapshot_hash)
             return
 
-        model_file_path = self.get_blob_file_path(model_file.hash)
-        if not GGUFInfoParser.is_model_gguf(model_file_path):
-            return
-
-        # Parse model, first and second parameter are irrelevant here
-        info: GGUFModelInfo = GGUFInfoParser.parse("model", "registry", model_file_path)
-        tmpl = info.get_chat_template()
-        if tmpl == "":
-            return
-
-        is_go_template = go2jinja.is_go_template(tmpl)
+        needs_conversion = go2jinja.is_go_template(tmpl)
 
         # Only jinja templates are usable for the supported backends, therefore don't mark file as
         # chat template if it is a Go Template (ollama-specific)
         files = [
             LocalSnapshotFile(
-                tmpl, "chat_template", SnapshotFileType.Other if is_go_template else SnapshotFileType.ChatTemplate
+                tmpl,
+                "chat_template_extracted",
+                SnapshotFileType.Other if needs_conversion else SnapshotFileType.ChatTemplate,
             )
         ]
-        if is_go_template:
+        if needs_conversion:
             try:
-                jinja_template = go2jinja.go_to_jinja(tmpl)
+                desired_template = convert_go_to_jinja(tmpl)
                 files.append(
-                    LocalSnapshotFile(jinja_template, "chat_template_converted", SnapshotFileType.ChatTemplate)
+                    LocalSnapshotFile(desired_template, "chat_template_converted", SnapshotFileType.ChatTemplate)
                 )
             except Exception as ex:
                 logger.debug(f"Failed to convert Go Template to Jinja: {ex}")
-
-        self.update_snapshot(model_tag, snapshot_hash, files)
+        else:
+            for file in ref_file.files:
+                if file.name == "chat_template_converted":
+                    # Should not exist but 0.13.0 needs_conversion logic was inverted
+                    self._remove_blob_file(self.get_snapshot_file_path(ref_file.hash, file.name))
+                    ref_file.remove_file(file.hash)
+                    break
+        self._update_snapshot(ref_file, snapshot_hash, files)
 
     def _verify_endianness(self, model_tag: str):
         ref_file = self.get_ref_file(model_tag)
@@ -302,13 +347,13 @@ class ModelStore:
         self._verify_endianness(model_tag)
         self._store.verify_snapshot()
 
-    def new_snapshot(self, model_tag: str, snapshot_hash: str, snapshot_files: list[SnapshotFile]):
+    def new_snapshot(self, model_tag: str, snapshot_hash: str, snapshot_files: list[SnapshotFile], verify: bool = True):
         snapshot_hash = sanitize_filename(snapshot_hash)
 
         try:
-            self._prepare_new_snapshot(model_tag, snapshot_hash, snapshot_files)
-            self._download_snapshot_files(model_tag, snapshot_hash, snapshot_files)
-            self._ensure_chat_template(model_tag, snapshot_hash, snapshot_files)
+            ref_file = self._prepare_new_snapshot(model_tag, snapshot_hash, snapshot_files)
+            self._download_snapshot_files(ref_file, snapshot_hash, snapshot_files)
+            self._ensure_chat_template(ref_file, snapshot_hash)
         except urllib.error.HTTPError as ex:
             perror(f"Failed to fetch required file: {ex}")
             perror("Removing snapshot...")
@@ -320,22 +365,21 @@ class ModelStore:
             raise ex
 
         try:
-            self.verify_snapshot(model_tag)
+            if verify:
+                self.verify_snapshot(model_tag)
         except EndianMismatchError as ex:
             perror(f"Verification of snapshot failed: {ex}")
             perror("Removing snapshot...")
             self.remove_snapshot(model_tag)
             raise ex
 
-    def update_snapshot(self, model_tag: str, snapshot_hash: str, new_snapshot_files: Sequence[SnapshotFile]) -> bool:
+    def _update_snapshot(
+        self, ref_file: RefJSONFile, snapshot_hash: str, new_snapshot_files: Sequence[SnapshotFile]
+    ) -> bool:
         validate_snapshot_files(new_snapshot_files)
         snapshot_hash = sanitize_filename(snapshot_hash)
 
         if not self.directory_setup_exists():
-            return False
-
-        ref_file = self.get_ref_file(model_tag)
-        if ref_file is None:
             return False
 
         # update ref file with deduplication by file hash
@@ -344,12 +388,14 @@ class ModelStore:
             if new_snapshot_file.hash not in existing_file_hashes:
                 ref_file.files.append(
                     StoreFile(
-                        new_snapshot_file.hash, new_snapshot_file.name, map_to_store_file_type(new_snapshot_file.type)
+                        new_snapshot_file.hash,
+                        new_snapshot_file.name,
+                        map_to_store_file_type(new_snapshot_file.type),
                     )
                 )
         ref_file.write_to_file()
 
-        self._download_snapshot_files(model_tag, snapshot_hash, new_snapshot_files)
+        self._download_snapshot_files(ref_file, snapshot_hash, new_snapshot_files)
         return True
 
     def _remove_blob_file(self, snapshot_file_path: str):

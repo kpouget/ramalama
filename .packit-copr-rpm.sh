@@ -6,8 +6,11 @@
 
 set -exo pipefail
 
-# Extract version from pyproject.toml instead of setup.py
-VERSION=$(awk -F'[""]' ' /^\s*version\s*/ {print $(NF-1)}' pyproject.toml )
+# Extract version from Python module since pyproject.toml uses dynamic versioning
+# Note: 
+# cd into ramalama directory so that the version module can be imported individually
+# and additional dependencies such as pyyaml or jsonschema are not required
+VERSION=$(cd ramalama && python3 -c "import version; print(version.version())")
 
 SPEC_FILE=rpm/ramalama.spec
 

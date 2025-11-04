@@ -12,8 +12,8 @@ load setup_suite
 
 # bats test_tags=distro-integration
 @test "ramalama pull ollama" {
-    run_ramalama pull tiny
-    run_ramalama rm tiny
+    run_ramalama pull ollama://tinyllama
+    run_ramalama rm ollama://tinyllama
     run_ramalama pull https://ollama.com/library/smollm:135m
     run_ramalama list
     is "$output" ".*https://ollama.com/library/smollm:135m" "image was actually pulled locally"
@@ -25,7 +25,7 @@ load setup_suite
     run_ramalama rm https://ollama.com/library/smollm:135m ollama://smollm:360m
 
     random_image_name=i_$(safename)
-    run_ramalama 1 -q pull ${random_image_name}
+    run_ramalama 22 -q pull ${random_image_name}
     is "$output" "Error: Manifest for ${random_image_name}:latest was not found in the Ollama registry"
 }
 
@@ -36,8 +36,8 @@ load setup_suite
     ollama serve &
     sleep 3
     ollama pull tinyllama
-    run_ramalama pull tiny
-    run_ramalama rm tiny
+    run_ramalama pull ollama://tinyllama
+    run_ramalama rm ollama://tinyllama
     ollama rm tinyllama
 
     ollama pull smollm:135m
@@ -54,7 +54,7 @@ load setup_suite
     ollama rm smollm:135m smollm:360m
 
     random_image_name=i_$(safename)
-    run_ramalama 1 -q pull ${random_image_name}
+    run_ramalama 22 -q pull ${random_image_name}
     is "$output" "Error: Manifest for ${random_image_name}:latest was not found in the Ollama registry"
 
     pkill ollama
@@ -77,7 +77,7 @@ load setup_suite
     is "$output" ".*Felladrin/gguf-smollm-360M-instruct-add-basics/smollm-360M-instruct-add-basics.IQ2_XXS" "image was actually pulled locally"
     run_ramalama rm huggingface://Felladrin/gguf-smollm-360M-instruct-add-basics/smollm-360M-instruct-add-basics.IQ2_XXS.gguf
 
-    skip_if_no_hf-cli
+    skip_if_no_hf_cli
     run_ramalama pull hf://HuggingFaceTB/SmolLM-135M
     run_ramalama list
     is "$output" ".*HuggingFaceTB/SmolLM-135M" "image was actually pulled locally"
@@ -118,9 +118,9 @@ load setup_suite
 }
 
 # bats test_tags=distro-integration
-@test "ramalama pull huggingface-cli cache" {
-    skip_if_no_hf-cli
-    huggingface-cli download Felladrin/gguf-smollm-360M-instruct-add-basics smollm-360M-instruct-add-basics.IQ2_XXS.gguf
+@test "ramalama pull hf cli cache" {
+    skip_if_no_hf_cli
+    hf download Felladrin/gguf-smollm-360M-instruct-add-basics smollm-360M-instruct-add-basics.IQ2_XXS.gguf
 
     run_ramalama pull hf://Felladrin/gguf-smollm-360M-instruct-add-basics/smollm-360M-instruct-add-basics.IQ2_XXS.gguf
     run_ramalama list
@@ -165,6 +165,24 @@ load setup_suite
     run_ramalama list
     is "$output" ".*quay.io/mmortari/gguf-py-example" "OCI image was actually pulled locally"
     run_ramalama rm oci://quay.io/mmortari/gguf-py-example:v1
+}
+
+@test "ramalama pull little-endian" {
+    if ! is_bigendian; then
+        skip "Testing pulls of opposite-endian models"
+    fi
+    run_ramalama rm --ignore tiny
+    run_ramalama 1 pull --verify=on tiny
+    is "$output" ".*Endian mismatch of host (BIG) and model (LITTLE).*" "detected little-endian model"
+}
+
+@test "ramalama pull big-endian" {
+    if is_bigendian; then
+        skip "Testing pulls of opposite-endian models"
+    fi
+    run_ramalama rm --ignore stories-be:260k
+    run_ramalama 1 pull --verify=on stories-be:260k
+    is "$output" ".*Endian mismatch of host (LITTLE) and model (BIG).*" "detected big-endian model"
 }
 
 @test "ramalama URL" {

@@ -16,8 +16,13 @@ venv/
 __pycache__/
 .aider*
 .coverage
+coverage/
 coverage.*
 htmlcov/
 .idea/
 .hypothesis/
 uv.lock
+.tox
+# pixi environments
+.pixi/*
+!.pixi/config.toml

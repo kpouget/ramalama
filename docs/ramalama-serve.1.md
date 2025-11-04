@@ -19,6 +19,7 @@ registry if it does not exist in local storage.
 | ModelScope    | modelscope://, ms:// | [`modelscope.cn`](https://modelscope.cn/)|
 | Ollama        | ollama:// | [`ollama.com`](https://www.ollama.com)|
 | OCI Container Registries | oci:// | [`opencontainers.org`](https://opencontainers.org)|
+| rlcr          | rlcr://   | [`ramalama.com`](https://registry.ramalama.com/projects/ramalama) |
 |||Examples: [`quay.io`](https://quay.io),  [`Docker Hub`](https://docker.io),[`Artifactory`](https://artifactory.com)|
 
 RamaLama defaults to the Ollama registry transport. This default can be overridden in the `ramalama.conf` file or via the RAMALAMA_TRANSPORTS
@@ -57,8 +58,11 @@ The default can be overridden in the ramalama.conf file.
 #### **--authfile**=*password*
 Path of the authentication file for OCI registries
 
+#### **--cache-reuse**=256
+Min chunk size to attempt reusing from the cache via KV shifting
+
 #### **--ctx-size**, **-c**
-size of the prompt context. This option is also available as **--max-model-len**. Applies to llama.cpp and vllm regardless of alias (default: 2048, 0 = loaded from model)
+size of the prompt context. This option is also available as **--max-model-len**. Applies to llama.cpp and vllm regardless of alias (default: 4096, 0 = loaded from model)
 
 #### **--detach**, **-d**
 Run the container in the background and print the new container ID.
@@ -74,6 +78,9 @@ write, and m for mknod(2).
 Example: --device=/dev/dri/renderD128:/dev/xvdc:rwm
 
 The device specification is passed directly to the underlying container engine. See documentation of the supported container engine for more information.
+
+Pass '--device=none' explicitly add no device to the container, eg for
+running a CPU-only performance comparison.
 
 #### **--dri**=*on* | *off*
 Enable or disable mounting `/dev/dri` into the container when running with `--api=llama-stack` (enabled by default). Use to prevent access to the host device when not required, or avoid errors in environments where `/dev/dri` is not available.
@@ -96,6 +103,7 @@ Generate specified configuration format for running the AI Model as a service
 | quadlet      | Podman supported container definition for running AI Model under systemd |
 | kube         | Kubernetes YAML definition for running the AI Model as a service         |
 | quadlet/kube | Kubernetes YAML definition for running the AI Model as a service and Podman supported container definition for running the Kube YAML specified pod under systemd|
+| compose      | Compose YAML definition for running the AI Model as a service            |
 
 Optionally, an output directory for the generated files can be specified by
 appending the path to the type, e.g. `--generate kube:/etc/containers/systemd`.
@@ -112,7 +120,7 @@ OCI container image to run with specified AI model. RamaLama defaults to using
 images based on the accelerator it discovers. For example:
 `quay.io/ramalama/ramalama`. See the table above for all default images.
 The default image tag is based on the minor version of the RamaLama package.
-Version 0.12.1 of RamaLama pulls an image with a `:0.12` tag from the quay.io/ramalama OCI repository. The --image option overrides this default.
+Version 0.14.0 of RamaLama pulls an image with a `:0.14` tag from the quay.io/ramalama OCI repository. The --image option overrides this default.
 
 The default can be overridden in the ramalama.conf file or via the
 RAMALAMA_IMAGE environment variable. `export RAMALAMA_IMAGE=quay.io/ramalama/aiimage:1.2` tells
@@ -133,6 +141,13 @@ Accelerated images:
 #### **--keep-groups**
 pass --group-add keep-groups to podman (default: False)
 If GPU device on host system is accessible to user via group access, this option leaks the groups into the container.
+
+#### **--max-tokens**=*integer*
+Maximum number of tokens to generate. Set to 0 for unlimited output (default: 0).
+This parameter is mapped to the appropriate runtime-specific parameter:
+- llama.cpp: `-n` parameter
+- MLX: `--max-tokens` parameter
+- vLLM: `--max-tokens` parameter
 
 #### **--model-draft**
 
@@ -198,6 +213,10 @@ not have more privileges than the user that launched them.
 Specify path to Retrieval-Augmented Generation (RAG) database or an OCI Image containing a RAG database
 
 Note: RAG support requires AI Models be run within containers, --nocontainer not supported. Docker does not support image mounting, meaning Podman support required.
+
+#### **--rag-image**=
+The image to use to process the RAG database specified by the `--rag` option. The image must contain the `/usr/bin/rag_framework` executable, which
+will create a proxy which embellishes client requests with RAG data before passing them on to the LLM, and returns the responses.
 
 #### **--runtime-args**="*args*"
 Add *args* to the runtime (llama.cpp or vllm) invocation.
@@ -392,6 +411,30 @@ spec:
 	name: dri
 ```
 
+### Generate Compose file
+```
+$ ramalama serve --name=my-smollm-server --port 1234 --generate=compose smollm:135m
+Generating Compose YAML file: docker-compose.yaml
+$ cat docker-compose.yaml
+version: '3.8'
+services:
+  my-smollm-server:
+    image: quay.io/ramalama/ramalama:latest
+    container_name: my-smollm-server
+    command: ramalama serve --host 0.0.0.0 --port 1234 smollm:135m
+    ports:
+      - "1234:1234"
+    volumes:
+      - ~/.local/share/ramalama/models/smollm-135m-instruct:/mnt/models/model.file:ro
+    environment:
+      - HOME=/tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges
+      - label=disable
+```
+
 ### Generate a Llama Stack Kubernetes YAML file named MyLamaStack
 ```
 $ ramalama serve --api llama-stack --name MyLamaStack --generate=kube oci://quay.io/rhatdan/granite:latest
@@ -423,7 +466,7 @@ spec:
       - name: model-server
 	image: quay.io/ramalama/ramalama:0.8
 	command: ["llama-server"]
-	args: ['--port', '8081', '--model', '/mnt/models/model.file', '--alias', 'quay.io/rhatdan/granite:latest', '--ctx-size', 2048, '--temp', '0.8', '--jinja', '--cache-reuse', '256', '-v', '--threads', 16, '--host', '127.0.0.1']
+	args: ['--port', '8081', '--model', '/mnt/models/model.file', '--alias', 'quay.io/rhatdan/granite:latest', '--temp', '0.8', '--jinja', '--cache-reuse', '256', '-v', '--threads', 16, '--host', '127.0.0.1']
 	securityContext:
 	  allowPrivilegeEscalation: false
 	  capabilities:
@@ -519,13 +562,13 @@ The MLX runtime is designed for Apple Silicon Macs and provides optimized perfor
 - **Operating System**: macOS only
 - **Hardware**: Apple Silicon (M1, M2, M3, or later)
 - **Container Mode**: MLX requires `--nocontainer` as it cannot run inside containers
-- **Dependencies**: Requires `mlx-lm` package to be installed on the host system
+- **Dependencies**: The `mlx-lm` uv package installed on the host system as a uv tool
 
-To install MLX dependencies, use either `uv` or `pip`:
+To install MLX dependencies, use `uv`:
 ```bash
-uv pip install mlx-lm
-# or pip:
-pip install mlx-lm
+uv tool install mlx-lm
+# or upgrade to the latest version:
+uv tool upgrade mlx-lm
 ```
 
 Example usage:

@@ -5,18 +5,41 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping, TypeAlias
 
-from ramalama.common import available
+from ramalama.cli_arg_normalization import normalize_pull_arg
+from ramalama.common import apple_vm, available
 from ramalama.layered_config import LayeredMixin
 from ramalama.toml_parser import TOMLParser
 
 PathStr: TypeAlias = str
-DEFAULT_PORT_RANGE: tuple[int, int] = (8080, 8090)
-DEFAULT_PORT: int = DEFAULT_PORT_RANGE[0]
 DEFAULT_IMAGE: str = "quay.io/ramalama/ramalama"
 DEFAULT_STACK_IMAGE: str = "quay.io/ramalama/llama-stack"
-SUPPORTED_ENGINES: TypeAlias = Literal["podman", "docker"] | PathStr
+DEFAULT_RAG_IMAGE: str = "quay.io/ramalama/ramalama-rag"
+SUPPORTED_ENGINES: TypeAlias = Literal["podman", "docker"]
 SUPPORTED_RUNTIMES: TypeAlias = Literal["llama.cpp", "vllm", "mlx"]
 COLOR_OPTIONS: TypeAlias = Literal["auto", "always", "never"]
+GGUF_QUANTIZATION_MODES: TypeAlias = Literal[
+    "Q2_K",
+    "Q3_K_S",
+    "Q3_K_M",
+    "Q3_K_L",
+    "Q4_0",
+    "Q4_K_S",
+    "Q4_K_M",
+    "Q5_0",
+    "Q5_K_S",
+    "Q5_K_M",
+    "Q6_K",
+    "Q8_0",
+]
+DEFAULT_GGUF_QUANTIZATION_MODE: GGUF_QUANTIZATION_MODES = "Q4_K_M"
+
+DEFAULT_CONFIG_DIRS = [
+    Path(f"{sys.prefix}/share/ramalama"),
+    Path(f"{sys.prefix}/local/share/ramalama"),
+    Path("/etc/ramalama"),
+    Path(os.path.expanduser(os.path.join(os.getenv("XDG_DATA_HOME", "~/.local/share"), "ramalama"))),
+    Path(os.path.expanduser(os.path.join(os.getenv("XDG_CONFIG_HOME", "~/.config"), "ramalama"))),
+]
 
 
 def get_default_engine() -> SUPPORTED_ENGINES | None:
@@ -27,7 +50,7 @@ def get_default_engine() -> SUPPORTED_ENGINES | None:
     if available("podman"):
         return "podman"
 
-    return "docker" if available("docker") and sys.platform != "darwin" else None
+    return "docker" if available("docker") else None
 
 
 def get_default_store() -> str:
@@ -35,6 +58,45 @@ def get_default_store() -> str:
         return "/var/lib/ramalama"
 
     return os.path.expanduser("~/.local/share/ramalama")
+
+
+def get_all_inference_spec_dirs(subdir: str) -> list[Path]:
+    ramalama_root = Path(__file__).parent.parent
+    development_spec_dir = ramalama_root / "inference-spec" / subdir
+    all_dirs = [development_spec_dir, *[conf_dir / "inference" for conf_dir in DEFAULT_CONFIG_DIRS]]
+
+    return [d for d in all_dirs if d.exists()]
+
+
+def get_inference_spec_files() -> dict[str, Path]:
+    files: dict[str, Path] = {}
+
+    for spec_dir in get_all_inference_spec_dirs("engines"):
+
+        # Give preference to .yaml, then .json spec files
+        file_extensions = ["*.yaml", "*.yml", "*.json"]
+        for file_extension in file_extensions:
+            # On naming collisions, i.e. muliple specs for one inference engine, prefer the
+            # spec files discovered later (i.e. user-level > system-level)
+            for spec_file in sorted(Path(spec_dir).glob(file_extension)):
+                file = Path(spec_file)
+                runtime = file.stem
+                files[runtime] = file
+
+    return files
+
+
+def get_inference_schema_files() -> dict[str, Path]:
+    files: dict[str, Path] = {}
+
+    for schema_dir in get_all_inference_spec_dirs("schema"):
+
+        for spec_file in sorted(Path(schema_dir).glob("schema.*.json")):
+            file = Path(spec_file)
+            version = file.name.replace("schema.", "").replace(".json", "")
+            files[version] = file
+
+    return files
 
 
 def coerce_to_bool(value: Any) -> bool:
@@ -67,10 +129,13 @@ class RamalamaSettings:
 @dataclass
 class BaseConfig:
     api: str = "none"
+    api_key: str | None = None
+    cache_reuse: int = 256
     carimage: str = "registry.access.redhat.com/ubi10-micro:latest"
     container: bool = None  # type: ignore
-    ctx_size: int = 2048
+    ctx_size: int = 0
     default_image: str = DEFAULT_IMAGE
+    default_rag_image: str = DEFAULT_RAG_IMAGE
     dryrun: bool = False
     engine: SUPPORTED_ENGINES | None = field(default_factory=get_default_engine)
     env: list[str] = field(default_factory=list)
@@ -85,12 +150,22 @@ class BaseConfig:
             "HIP_VISIBLE_DEVICES": "quay.io/ramalama/rocm",
             "INTEL_VISIBLE_DEVICES": "quay.io/ramalama/intel-gpu",
             "MUSA_VISIBLE_DEVICES": "quay.io/ramalama/musa",
+            "VLLM": "registry.redhat.io/rhelai1/ramalama-vllm",
+        }
+    )
+    rag_image: str | None = None
+    rag_images: dict[str, str] = field(
+        default_factory=lambda: {
+            "CUDA_VISIBLE_DEVICES": "quay.io/ramalama/cuda-rag",
+            "HIP_VISIBLE_DEVICES": "quay.io/ramalama/rocm-rag",
+            "INTEL_VISIBLE_DEVICES": "quay.io/ramalama/intel-gpu-rag",
         }
     )
     keep_groups: bool = False
+    max_tokens: int = 0
     ngl: int = -1
     ocr: bool = False
-    port: str = str(DEFAULT_PORT)
+    port: str = "8080"
     prefix: str = None  # type: ignore
     pull: str = "newer"
     rag_format: Literal["qdrant", "json", "markdown", "milvus"] = "qdrant"
@@ -104,10 +179,13 @@ class BaseConfig:
     threads: int = -1
     transport: str = "ollama"
     user: UserConfig = field(default_factory=UserConfig)
+    verify: bool = True
+    gguf_quantization_mode: GGUF_QUANTIZATION_MODES = DEFAULT_GGUF_QUANTIZATION_MODE
 
     def __post_init__(self):
         self.container = coerce_to_bool(self.container) if self.container is not None else self.engine is not None
         self.image = self.image if self.image is not None else self.default_image
+        self.pull = normalize_pull_arg(self.pull, self.engine)
 
 
 class Config(LayeredMixin, BaseConfig):
@@ -117,7 +195,21 @@ class Config(LayeredMixin, BaseConfig):
     Mixins should be inherited first.
     """
 
-    pass
+    def __post_init__(self):
+        self._finalize_engine()
+        super().__post_init__()
+
+    def _finalize_engine(self: "Config"):
+        """
+        Finalizes engine selection, with special handling for Podman on macOS.
+
+        If Podman is detected on macOS without a configured machine, it falls back on docker availability.
+        """
+        is_podman = self.engine is not None and os.path.basename(self.engine) == "podman"
+        if is_podman and sys.platform == "darwin":
+            run_with_podman_engine = apple_vm(self.engine, self)
+            if not run_with_podman_engine and not self.is_set("engine"):
+                self.engine = "docker" if available("docker") else None
 
 
 def load_file_config() -> dict[str, Any]:
@@ -131,12 +223,7 @@ def load_file_config() -> dict[str, Any]:
         return config
 
     config = {}
-    default_config_paths = [
-        "/usr/share/ramalama/ramalama.conf",
-        "/usr/local/share/ramalama/ramalama.conf",
-        "/etc/ramalama/ramalama.conf",
-        os.path.expanduser(os.path.join(os.getenv("XDG_CONFIG_HOME", "~/.config"), "ramalama", "ramalama.conf")),
-    ]
+    default_config_paths = [os.path.join(conf_dir, "ramalama.conf") for conf_dir in DEFAULT_CONFIG_DIRS]
 
     config_paths = []
     for path in default_config_paths:
@@ -184,10 +271,11 @@ def load_env_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     if 'env' in config:
         config['env'] = config['env'].split(',')
 
-    if 'images' in config:
-        config['images'] = json.loads(config['images'])
+    for key in ['images', 'rag_images']:
+        if key in config:
+            config[key] = json.loads(config[key])
 
-    for key in ['ocr', 'keep_groups', 'container']:
+    for key in ['ocr', 'keep_groups', 'container', 'verify']:
         if key in config:
             config[key] = coerce_to_bool(config[key])
 
@@ -203,3 +291,5 @@ def default_config(env: Mapping[str, str] | None = None) -> Config:
 
 
 CONFIG = default_config()
+DEFAULT_PORT: int = int(CONFIG.port)
+DEFAULT_PORT_RANGE: tuple[int, int] = (DEFAULT_PORT, DEFAULT_PORT + 10)

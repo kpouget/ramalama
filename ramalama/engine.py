@@ -4,7 +4,10 @@ import os
 import subprocess
 import sys
 import time
+from abc import ABC, abstractmethod
 from http.client import HTTPConnection, HTTPException
+from tempfile import NamedTemporaryFile
+from typing import Any, Callable
 
 # Live reference for checking global vars
 import ramalama.common
@@ -12,29 +15,25 @@ from ramalama.common import check_nvidia, exec_cmd, get_accel_env_vars, perror, 
 from ramalama.logger import logger
 
 
-class Engine:
+class BaseEngine(ABC):
+    """General-purpose engine for running podman or docker commands"""
+
     def __init__(self, args):
-        self.exec_args = [
-            args.engine,
-            "run",
-            "--rm",
-        ]
         base = os.path.basename(args.engine)
         self.use_docker = base == "docker"
         self.use_podman = base == "podman"
         self.args = args
+        self.exec_args = [self.args.engine]
+        self.base_args()
         self.add_labels()
-        self.add_device_options()
-        self.add_env_option()
         self.add_network()
         self.add_oci_runtime()
-        self.add_port_option()
         self.add_privileged_options()
         self.add_pull_newer()
-        self.add_rag()
-        self.add_tty_option()
         self.handle_podman_specifics()
-        self.add_detach_option()
+
+    @abstractmethod
+    def base_args(self): ...
 
     def add_label(self, label):
         self.add(["--label", label])
@@ -45,16 +44,19 @@ class Engine:
     def add_labels(self):
         add_labels(self.args, self.add_label)
 
+    def add_pull(self, value: str) -> None:
+        self.add_args("--pull", value)
+
     def add_pull_newer(self):
-        if not self.args.dryrun and self.use_docker and self.args.pull == "newer":
+        if not self.args.dryrun and self.use_docker and getattr(self.args, "pull", None) == "newer":
             try:
                 if not self.args.quiet:
                     perror(f"Checking for newer image {self.args.image}")
                 run_cmd([str(self.args.engine), "pull", "-q", self.args.image], ignore_all=True)
             except Exception:  # Ignore errors, the run command will handle it.
                 pass
-        else:
-            self.exec_args += ["--pull", self.args.pull]
+        elif getattr(self.args, "pull", None):
+            self.add_pull(self.args.pull)
 
     def add_network(self):
         if getattr(self.args, "network", None):
@@ -71,53 +73,20 @@ class Engine:
                 self.exec_args += ["--runtime", "/usr/bin/nvidia-container-runtime"]
 
     def add_privileged_options(self):
-        if getattr(self.args, "privileged", False):
-            self.exec_args += ["--privileged"]
-        else:
-            if not getattr(self.args, "selinux", False):
-                self.exec_args += [
-                    "--security-opt=label=disable",
-                ]
-            if not getattr(self.args, "nocapdrop", False):
-                self.exec_args += [
-                    "--cap-drop=all",
-                    "--security-opt=no-new-privileges",
-                ]
+        if not getattr(self.args, "selinux", False):
+            self.add_args("--security-opt=label=disable")
+        if not getattr(self.args, "nocapdrop", False):
+            self.add_args("--cap-drop=all")
+            self.add_args("--security-opt=no-new-privileges")
 
     def cap_add(self, cap):
         self.exec_args += ["--cap-add", cap]
 
-    def use_tty(self):
-        if not sys.stdin.isatty():
-            return False
-        if getattr(self.args, "ARGS", None):
-            return False
-        return getattr(self.args, "subcommand", "") == "run"
-
-    def add_env_option(self):
-        for env in getattr(self.args, "env", []):
-            self.exec_args += ["--env", env]
-
-    def add_tty_option(self):
-        if self.use_tty():
-            self.exec_args += ["-t"]
-
-    def add_detach_option(self):
-        if getattr(self.args, "detach", False):
-            self.exec_args += ["-d"]
-
-    def add_port_option(self):
-        if getattr(self.args, "port", "") == "":
+    def add_device_options(self):
+        request_no_device = getattr(self.args, "device", None) == ['none']
+        if request_no_device:
             return
 
-        host = getattr(self.args, "host", "0.0.0.0")
-        host = f"{host}:" if host != "0.0.0.0" else ""
-        if self.args.port.count(":") > 0:
-            self.exec_args += ["-p", f"{host}{self.args.port}"]
-        else:
-            self.exec_args += ["-p", f"{host}{self.args.port}:{self.args.port}"]
-
-    def add_device_options(self):
         if getattr(self.args, "device", None):
             for device_arg in self.args.device:
                 self.exec_args += ["--device", device_arg]
@@ -142,17 +111,6 @@ class Engine:
 
             self.exec_args += ["-e", f"{k}={v}"]
 
-    def add_rag(self):
-        if not getattr(self.args, "rag", None):
-            return
-
-        if os.path.exists(self.args.rag):
-            rag = os.path.realpath(self.args.rag)
-            # Added temp read write because vector database requires write access even if nothing is written
-            self.exec_args.append(f"--mount=type=bind,source={rag},destination=/rag/vector.db,rw=true{self.relabel()}")
-        else:
-            self.exec_args.append(f"--mount=type=image,source={self.args.rag},destination=/rag,rw=true{self.relabel()}")
-
     def handle_podman_specifics(self):
         if getattr(self.args, "podman_keep_groups", None):
             self.exec_args += ["--group-add", "keep-groups"]
@@ -160,11 +118,21 @@ class Engine:
     def add(self, newargs):
         self.exec_args += newargs
 
+    def add_args(self, *args: str) -> None:
+        self.add(args)
+
+    def add_volume(self, src: str, dest: str, *, opts="ro"):
+        self.add_args("-v", f"{src}:{dest}:{opts}{self.relabel()}")
+
     def dryrun(self):
         dry_run(self.exec_args)
 
     def run(self):
         run_cmd(self.exec_args, stdout=None)
+
+    def run_process(self) -> subprocess.CompletedProcess:
+        """Run the command and return the CompletedProcess."""
+        return run_cmd(self.exec_args, encoding="utf-8")
 
     def exec(self, stdout2null: bool = False, stderr2null: bool = False):
         exec_cmd(self.exec_args, stdout2null, stderr2null)
@@ -173,6 +141,115 @@ class Engine:
         if getattr(self.args, "selinux", False) and self.use_podman:
             return ",z"
         return ""
+
+
+class Engine(BaseEngine):
+    """Engine for executing 'podman run'"""
+
+    def __init__(self, args):
+        super().__init__(args)
+        self.add_detach_option()
+        self.add_device_options()
+        self.add_env_options()
+        self.add_port_option()
+        self.add_tty_option()
+
+    def base_args(self) -> None:
+        self.add_args("run", "--rm")
+
+    def add_name(self, name: str) -> None:
+        self.add_args("--name", name)
+
+    def add_detach_option(self) -> None:
+        if getattr(self.args, "detach", False):
+            self.add_args("-d")
+
+    def add_env_option(self, value: str) -> None:
+        self.add_args("--env", value)
+
+    def add_env_options(self) -> None:
+        for env in getattr(self.args, "env", []):
+            self.add_env_option(env)
+
+    def add_port_option(self) -> None:
+        if getattr(self.args, "port", "") == "":
+            return
+
+        host = getattr(self.args, "host", "0.0.0.0")
+        host = f"{host}:" if host != "0.0.0.0" else ""
+        if self.args.port.count(":") > 0:
+            self.add_args("-p", f"{host}{self.args.port}")
+        else:
+            self.add_args("-p", f"{host}{self.args.port}:{self.args.port}")
+
+    def add_privileged_options(self) -> None:
+        if getattr(self.args, "privileged", False):
+            self.add_args("--privileged")
+        else:
+            super().add_privileged_options()
+
+    def use_tty(self) -> bool:
+        if not sys.stdin.isatty():
+            return False
+        if getattr(self.args, "ARGS", None):
+            return False
+        return getattr(self.args, "subcommand", "") == "run"
+
+    def add_tty_option(self) -> None:
+        if self.use_tty():
+            self.add_args("-t")
+
+
+class BuildEngine(BaseEngine):
+    """Engine for executing 'podman build'"""
+
+    def base_args(self) -> None:
+        self.add_args("build", "-q", "--no-cache")
+        if self.use_podman:
+            self.add_args("--layers=false")
+
+    def add_network(self) -> None:
+        self.add_args("--network=none")
+
+    def add_privileged_options(self) -> None:
+        if self.use_podman:
+            super().add_privileged_options()
+
+    def add_pull(self, value: str) -> None:
+        if self.use_docker:
+            if value != "never":
+                # docker build only accepts a --pull option with no value, meaning
+                # "always try to pull any referenced images"
+                self.add_args("--pull")
+        else:
+            # podman build does not accept a space-separated option (--pull foo), so pass it
+            # as an equals-separated option (--pull=foo)
+            self.add_args(f"--pull={value}")
+
+    def build(self, cfile: str, context: str, /, *, tag: str | None = None) -> str:
+        """
+        Build an image using specified Containerfile path and context dir.
+        If tag is provided, the image will be tagged.
+        Return the ID of the built image.
+        """
+        if tag:
+            self.add_args("-t", tag)
+        self.add_args("-f", cfile, context)
+        if self.args.dryrun:
+            self.dryrun()
+            return ""
+        return self.run_process().stdout.strip()
+
+    def build_containerfile(self, content: str, context: str, /, *, tag: str | None = None):
+        """
+        Build an image using the provided Containerfile content and context dir.
+        If tag is provided, the image will be tagged.
+        Return the ID of the built image.
+        """
+        with NamedTemporaryFile(delete_on_close=False) as tfile:
+            tfile.write(content.encode("utf-8"))
+            tfile.close()
+            return self.build(tfile.name, context, tag=tag)
 
 
 def dry_run(args):
@@ -348,7 +425,7 @@ def add_labels(args, add_label):
             add_label(f"{label_prefix}={value}")
 
 
-def is_healthy(args, timeout=3):
+def is_healthy(args, timeout: int = 3, model_name: str | None = None):
     """Check if the response from the container indicates a healthy status."""
     conn = None
     try:
@@ -369,9 +446,11 @@ def is_healthy(args, timeout=3):
             logger.debug(f"Container {args.name} does not include a model list in the response")
             return False
         model_names = [m["name"] for m in body["models"]]
-        # The transport is not included in the model name returned by the endpoint
-        model_name = args.MODEL.split("://")[-1]
-        if model_name not in model_names:
+        if not model_name:
+            # The transport and tag is not included in the model name returned by the endpoint
+            model_name = args.MODEL.split("://")[-1]
+            model_name = model_name.split(":")[0]
+        if not any(model_name in name for name in model_names):
             logger.debug(f'Container {args.name} does not include "{model_name}" in the model list: {model_names}')
             return False
         logger.debug(f"Container {args.name} is healthy")
@@ -381,14 +460,14 @@ def is_healthy(args, timeout=3):
             conn.close()
 
 
-def wait_for_healthy(args, timeout=20):
+def wait_for_healthy(args, health_func: Callable[[Any], bool], timeout=20):
     """Waits for a container to become healthy by polling its endpoint."""
     logger.debug(f"Waiting for container {args.name} to become healthy (timeout: {timeout}s)...")
     start_time = time.time()
 
     while time.time() - start_time < timeout:
         try:
-            if is_healthy(args):
+            if health_func(args):
                 return
         except (ConnectionError, HTTPException, UnicodeDecodeError, json.JSONDecodeError) as e:
             logger.debug(f"Health check of container {args.name} failed, retrying... Error: {e}")

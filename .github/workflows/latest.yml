@@ -26,7 +26,7 @@ jobs:
         run: |
            set -e
            # Enable universe repository which contains podman
-           sudo add-apt-repository "deb http://archive.ubuntu.com/ubuntu oracular universe"
+           sudo add-apt-repository "deb http://old-releases.ubuntu.com/ubuntu oracular universe"
            # Update package lists
            sudo apt-get update
            sudo apt-get purge firefox
@@ -63,7 +63,7 @@ jobs:
         run: make end-to-end-tests
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout ramalama
         uses: actions/checkout@v5
@@ -89,7 +89,7 @@ jobs:
           run: |
              set -e
              # Enable universe repository which contains podman
-             sudo add-apt-repository "deb http://archive.ubuntu.com/ubuntu oracular universe"
+             sudo add-apt-repository "deb http://old-releases.ubuntu.com/ubuntu oracular universe"
              # Update package lists
              sudo apt-get update
              sudo apt-get purge firefox
