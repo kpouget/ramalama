@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//var/home/kpouget/pod-virt/ramalama/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
