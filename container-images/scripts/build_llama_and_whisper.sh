@@ -19,8 +19,9 @@ Python 3.10"
 }
 
 dnf_install_remoting() {
-    LIBDRM_VERSION=2.4.123-2.el9
-    curl -Ssf https://mirror.stream.centos.org/9-stream/AppStream/aarch64/os/Packages/libdrm-devel-${LIBDRM_VERSION}.rpm -O
+    ARCH=$(arch | sed s/arm64/aarch64/g)
+    LIBDRM_VERSION=2.4.123-2.el9.$ARCH
+    curl -Ssf https://mirror.stream.centos.org/9-stream/AppStream/$ARCH/os/Packages/libdrm-devel-${LIBDRM_VERSION}.rpm -O
     rpm -i --nosignature --nodeps libdrm-devel-${LIBDRM_VERSION}.rpm
 }
 
