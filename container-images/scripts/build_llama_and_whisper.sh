@@ -151,6 +151,7 @@ dnf_install() {
     dnf_install_cann
   elif [ "$containerfile" = "remoting" ]; then
     dnf_install_remoting
+    dnf_install_mesa # on x86_64 and aarch64 we use vulkan via mesa
   fi
 
   dnf_install_ffmpeg
