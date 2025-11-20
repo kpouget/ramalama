@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi:9.6-1749542372
+FROM quay.io/fedora/fedora:42
 
 COPY . /src/ramalama
 WORKDIR /src/ramalama
