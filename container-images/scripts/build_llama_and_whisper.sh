@@ -23,6 +23,10 @@ dnf_install_remoting() {
     LIBDRM_VERSION=2.4.123-2.el9.$ARCH
     curl -Ssf https://mirror.stream.centos.org/9-stream/AppStream/$ARCH/os/Packages/libdrm-devel-${LIBDRM_VERSION}.rpm -O
     rpm -i --nosignature --nodeps libdrm-devel-${LIBDRM_VERSION}.rpm
+
+    if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
+        dnf install -y meson libepoxy-devel
+    fi
 }
 
 dnf_install_intel_gpu() {
@@ -251,7 +255,19 @@ configure_common_flags() {
     common_flags+=("-DGGML_MUSA=ON")
     ;;
   remoting)
-    common_flags+=("-DGGML_REMOTINGFRONTEND=ON")
+      common_flags+=("-DGGML_REMOTINGFRONTEND=ON")
+
+      if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
+          common_flags+=("-DGGML_REMOTINGBACKEND=ON")
+
+          if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" == "vulkan" ]; then
+              common_flags+=("-DGGML_VULKAN=ON")
+          else
+              echo "ERROR: unknown API Remoting backend requested: ${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}"
+              echo "ERROR: expected 'vulkan' or unset. Got '${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}'."
+              exit 1
+          fi
+      fi
     ;;
   esac
 }
@@ -330,6 +346,22 @@ add_common_flags() {
   esac
 }
 
+clone_and_build_virglrender() {
+    virgl_commit=${VIRGL_COMMIT:-main-linux}
+    virgl_repo=${VIRGL_REPO:-https://gitlab.freedesktop.org/kpouget/virglrenderer}
+    git_clone_specific_commit "$virgl_repo" "$virgl_commit"
+
+    meson setup ./build -Dapir=true --buildtype=debug --prefix=/usr
+    ninja -C ./build
+    ninja -C ./build install
+
+    cd ..
+
+    if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" != y ]]; then
+        rm -rf virglrenderer
+    fi
+}
+
 main() {
   # shellcheck disable=SC1091
   source /etc/os-release
@@ -352,6 +384,10 @@ main() {
   available dnf && dnf_install
   if [ -n "$containerfile" ]; then
     install_ramalama "${install_prefix}"
+  fi
+
+  if [ "$containerfile" = "remoting" ] && [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
+      clone_and_build_virglrender
   fi
 
   install_entrypoints
