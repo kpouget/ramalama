@@ -40,6 +40,10 @@ add_build_platform() {
       # set to 'y' to include the debug tools and debug files in the image
       "RAMALAMA_IMAGE_BUILD_DEBUG_MODE"
 
+      # with the 'remoting' target, set this to 'vulkan' to include
+      # the API backend _and_ the ggml-vulkan backend
+      "RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND"
+
       # reference of a whisper.cpp repo and commit to use
       "WHISPER_CPP_REPO"
       "WHISPER_CPP_PULL_REF"

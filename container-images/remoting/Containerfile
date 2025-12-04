@@ -1,6 +1,16 @@
-FROM registry.access.redhat.com/ubi9/ubi:9.6-1749542372
+FROM quay.io/fedora/fedora:42
 
 COPY . /src/ramalama
 WORKDIR /src/ramalama
 RUN container-images/scripts/build_llama_and_whisper.sh "remoting"
 WORKDIR /
+
+ENV APIR_LLAMA_CPP_GGML_LIBRARY_REG=ggml_backend_vk_reg
+ENV APIR_LLAMA_CPP_GGML_LIBRARY_INIT=ggml_backend_vk_init
+ENV VIRGL_APIR_LOG_TO_FILE=/tmp/topsail_apir_virglrenderer.log
+ENV APIR_LLAMA_CPP_LOG_TO_FILE=/tmp/topsail_apir_llama_cpp.log
+
+ENV RENDER_SERVER_EXEC_PATH=/usr/libexec/virgl_render_server
+ENV VIRGL_APIR_BACKEND_LIBRARY=/usr/lib64/libggml-remotingbackend.so
+ENV RENDER_SERVER_EXEC_PATH=/usr/libexec/virgl_render_server
+ENV APIR_LLAMA_CPP_GGML_LIBRARY_PATH=/usr/lib64/libggml-vulkan.so
