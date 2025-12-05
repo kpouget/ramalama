@@ -79,9 +79,6 @@ class BaseEngine(ABC):
             self.add_args("--cap-drop=all")
             self.add_args("--security-opt=no-new-privileges")
 
-    def cap_add(self, cap):
-        self.exec_args += ["--cap-add", cap]
-
     def add_device_options(self):
         request_no_device = getattr(self.args, "device", None) == ['none']
         if request_no_device:
@@ -155,7 +152,12 @@ class Engine(BaseEngine):
         self.add_tty_option()
 
     def base_args(self) -> None:
-        self.add_args("run", "--rm")
+        # For run command, do not use --rm to auto-remove container on exit
+        subcommand = getattr(self.args, "subcommand", "")
+        if subcommand == "run":
+            self.add_args("run")
+        else:
+            self.add_args("run", "--rm")
 
     def add_name(self, name: str) -> None:
         self.add_args("--name", name)
@@ -358,7 +360,7 @@ def logs(args, name, ignore_stderr=False):
     return run_cmd(conman_args, ignore_stderr=ignore_stderr).stdout.decode("utf-8").strip()
 
 
-def stop_container(args, name):
+def stop_container(args, name, remove=False):
     if not name:
         raise ValueError("must specify a container name")
     conman = str(args.engine) if args.engine is not None else None
@@ -396,20 +398,22 @@ def stop_container(args, name):
         else:
             raise
 
-
-def container_connection(args, name, port):
-    if not name:
-        raise ValueError("must specify a container name")
-    if not port:
-        raise ValueError("must specify a port to check")
-
-    conman = str(args.engine) if args.engine is not None else None
-    if conman == "" or conman is None:
-        raise ValueError("no container manager (Podman, Docker) found")
-
-    conman_args = [conman, "port", name, port]
-    output = run_cmd(conman_args).stdout.decode("utf-8").strip()
-    return "" if output == "" else output.split(">")[-1].strip()
+    # Remove the container if requested and not a pod (pods are already removed above)
+    if remove and pod == "":
+        conman_args = [conman, "rm"]
+        if args.ignore:
+            if conman == "podman":
+                conman_args += ["--ignore"]
+            else:
+                ignore_stderr = True
+        conman_args += [name]
+        try:
+            run_cmd(conman_args, ignore_stderr=ignore_stderr)
+        except subprocess.CalledProcessError:
+            if args.ignore and conman == "docker":
+                return
+            else:
+                raise
 
 
 def add_labels(args, add_label):

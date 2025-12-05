@@ -54,6 +54,14 @@ RamaLama eliminates the need to configure the host system by instead pulling a c
 <br>
 
 ## Install
+### Install on macOS (Self-Contained Installer)
+Download the self-contained macOS installer that includes Python and all dependencies:
+
+1. Download the latest `.pkg` installer from [Releases](https://github.com/containers/ramalama/releases)
+2. Double-click to install, or run: `sudo installer -pkg RamaLama-*-macOS-Installer.pkg -target /`
+
+See [macOS Installation Guide](docs/MACOS_INSTALL.md) for detailed instructions.
+
 ### Install on Fedora
 RamaLama is available in [Fedora](https://fedoraproject.org/) and later. To install it, run:
 ```
@@ -71,6 +79,19 @@ Install RamaLama by running:
 ```
 curl -fsSL https://ramalama.ai/install.sh | bash
 ```
+
+### Install on Windows
+RamaLama supports Windows with Docker Desktop or Podman Desktop:
+```powershell
+pip install ramalama
+```
+
+**Requirements:**
+- Python 3.10 or later
+- Docker Desktop or Podman Desktop with WSL2 backend
+- For GPU support, see [NVIDIA GPU Setup for WSL2](docs/readme/wsl2-docker-cuda.md)
+
+**Note:** Windows support requires running containers via Docker/Podman. The model store uses hardlinks (no admin required) or falls back to file copies if hardlinks are unavailable.
 
 ## Accelerated images
 
@@ -114,6 +135,7 @@ RamaLama then pulls AI Models from model registries, starting a chatbot or REST 
 | Intel ARC GPUs (Linux)             | &check; See note below      |
 | Intel GPUs (vulkan / Linux)        | &check;                     |
 | Moore Threads GPU (musa / Linux)   | &check; See note below      |
+| Windows (with Docker/Podman)       | &check; Requires WSL2       |
 
 ### Nvidia GPUs
 On systems with NVIDIA GPUs, see [ramalama-cuda](docs/ramalama-cuda.7.md) documentation for the correct host system configuration.
@@ -184,8 +206,8 @@ RamaLama supports multiple AI model registries types called transports.
 | HuggingFace              | [`huggingface.co`](https://www.huggingface.co)       |
 | ModelScope               | [`modelscope.cn`](https://www.modelscope.cn)         |
 | Ollama                   | [`ollama.com`](https://www.ollama.com)               |
+| RamaLama Labs Container Registry | [`ramalama.com`](https://registry.ramalama.com) |
 | OCI Container Registries | [`opencontainers.org`](https://opencontainers.org)   |
-| RamaLama Labs Container Registry                      | [`ramalama.com`](https://registry.ramalama.com/projects/ramalama) |
 |                          |Examples: [`quay.io`](https://quay.io),  [`Docker Hub`](https://docker.io), [`Pulp`](https://pulpproject.org), and [`Artifactory`](https://jfrog.com/artifactory/)|
 
 ### Default Transport
@@ -1211,10 +1233,16 @@ and
 [PRs](https://github.com/containers/ramalama/pulls)
 tracking system.
 
+### Community / Developer Meetups
+
+We host a public community and developer meetup on Discord every other week to discuss project direction and provide an open forum for users to get help, ask questions, and showcase new features.
+
+[**Join on Discord**](https://discord.gg/MkCXuTRBUn)
+[**Meeting Agenda**](https://docs.google.com/document/d/1wiqn7ItKgc8BgyTUQ46eeY23ms_hWbkhAoiP9D1ClfY/edit?tab=t.0#heading=h.b1x47hb6d0pt)
+
 ## Roadmap
 
 See the full [Roadmap](./Roadmap.md).
-
 
 ## Contributors
 

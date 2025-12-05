@@ -8,7 +8,6 @@ import subprocess
 import sys
 import urllib.error
 from datetime import datetime, timezone
-from pathlib import Path
 from textwrap import dedent
 from typing import get_args
 from urllib.parse import urlparse
@@ -40,6 +39,7 @@ from ramalama.config import (
     load_file_config,
 )
 from ramalama.endian import EndianMismatchError
+from ramalama.log_levels import LogLevel
 from ramalama.logger import configure_logger, logger
 from ramalama.model_inspect.error import ParseError
 from ramalama.model_store.global_store import GlobalModelStore
@@ -133,8 +133,6 @@ def available_metadata(prefix, parsed_args, **kwargs):
         # shotnames resolution has not been applied for auto-completion
         # Therefore it needs to be done explicitly here in order to support it
         resolved_model = shortnames.resolve(parsed_args.MODEL)
-        if not resolved_model:
-            resolved_model = parsed_args.MODEL
 
         metadata = New(resolved_model, parsed_args).inspect_metadata()
         return [field for field in metadata.keys() if field.startswith(parsed_args.get)]
@@ -313,12 +311,38 @@ def parse_arguments(parser):
 
 def post_parse_setup(args):
     """Perform additional setup after parsing arguments."""
+
+    def map_https_to_transport(input: str) -> str | None:
+        if input.startswith("https://") or input.startswith("http://"):
+            url = urlparse(input)
+            # detect if the whole repo is defined or a specific file
+            if url.path.count("/") != 2:
+                return input
+            if url.hostname in ["hf.co", "huggingface.co"]:
+                return f"hf:/{url.path}"
+            if url.hostname in ["ollama.com"]:
+                return f"ollama:/{url.path}"
+        return input
+
+    # Resolve the model input
+    # First, map https:// inputs to ollama or huggingface based on url domain
+    # Then resolve the input based on the available shortname list
     if getattr(args, "MODEL", None):
-        if args.subcommand != "rm":
-            resolved_model = shortnames.resolve(args.MODEL)
-            if resolved_model:
-                args.UNRESOLVED_MODEL = args.MODEL
-                args.MODEL = resolved_model
+        if isinstance(args.MODEL, str):
+            args.INITIAL_MODEL = args.MODEL
+            args.MODEL = map_https_to_transport(args.MODEL)
+
+            args.UNRESOLVED_MODEL = args.MODEL
+            args.MODEL = shortnames.resolve(args.MODEL)
+
+        if isinstance(args.MODEL, list):
+            args.INITIAL_MODEL = [m for m in args.MODEL]
+            for i in range(len(args.MODEL)):
+                args.MODEL[i] = map_https_to_transport(args.MODEL[i])
+
+            args.UNRESOLVED_MODEL = [m for m in args.MODEL]
+            for i in range(len(args.MODEL)):
+                args.MODEL[i] = shortnames.resolve(args.MODEL[i])
 
         # TODO: This is a hack. Once we have more typing in place these special cases
         # _should_ be removed.
@@ -346,7 +370,8 @@ def post_parse_setup(args):
     if hasattr(args, 'pull'):
         args.pull = normalize_pull_arg(args.pull, getattr(args, 'engine', None))
 
-    configure_logger("DEBUG" if args.debug else "WARNING")
+    log_level = LogLevel.DEBUG if args.debug else (CONFIG.log_level or LogLevel.WARNING)
+    configure_logger(log_level)
 
 
 def login_parser(subparsers):
@@ -435,24 +460,6 @@ def human_duration(d):
     return "1 year" if d < 63072000 else f"{d // 31536000} years"
 
 
-def list_files_by_modification(args):
-    paths = Path().rglob("*")
-    models = []
-    for path in paths:
-        if str(path).startswith("file/"):
-            if not os.path.exists(str(path)):
-                path = str(path).replace("file/", "file:///")
-                perror(f"{path} does not exist")
-                continue
-        if os.path.exists(path):
-            models.append(path)
-        else:
-            perror(f"Broken symlink found in: {args.store}/models/{path} \nAttempting removal")
-            New(str(path).replace("/", "://", 1), args).remove(args)
-
-    return sorted(models, key=lambda p: os.path.getmtime(p), reverse=True)
-
-
 def bench_cli(args):
     model = New(args.MODEL, args)
     model.ensure_model_exists(args)
@@ -529,18 +536,6 @@ def human_readable_size(size):
         size /= 1024
 
     return f"{size} PB"
-
-
-def get_size(path):
-    if os.path.isdir(path):
-        size = 0
-        for dirpath, _, filenames in os.walk(path, followlinks=True):
-            for file in filenames:
-                filepath = os.path.join(dirpath, file)
-                if not os.path.islink(filepath):
-                    size += os.path.getsize(filepath)
-        return size
-    return os.path.getsize(path)
 
 
 def _list_models_from_store(args):
@@ -738,8 +733,6 @@ def convert_cli(args):
 
     target = args.TARGET
     tgt = shortnames.resolve(target)
-    if not tgt:
-        tgt = target
 
     model = TransportFactory(tgt, args).create_oci()
 
@@ -783,8 +776,6 @@ Model "raw" contains the model and a link file model.file to it stored at /.""",
 
 def _get_source_model(args):
     src = shortnames.resolve(args.SOURCE)
-    if not src:
-        src = args.SOURCE
     smodel = New(src, args)
     if smodel.type == "OCI":
         raise ValueError(f"converting from an OCI based image {src} is not supported")
@@ -798,8 +789,6 @@ def push_cli(args):
     target = args.SOURCE
     if args.TARGET:
         target = shortnames.resolve(args.TARGET)
-        if not target:
-            target = args.TARGET
     target_model = New(target, args)
 
     try:
@@ -1057,6 +1046,13 @@ def chat_run_options(parser):
     )
     parser.add_argument("--prefix", type=str, help="prefix for the user prompt", default=default_prefix())
     parser.add_argument("--mcp", nargs="*", help="MCP servers to use for the chat")
+    parser.add_argument(
+        "--summarize-after",
+        type=int,
+        default=CONFIG.summarize_after,
+        metavar="N",
+        help="automatically summarize conversation history after N messages to prevent context growth (0=disabled)",
+    )
 
 
 def chat_parser(subparsers):
@@ -1418,9 +1414,7 @@ def rm_parser(subparsers):
 
 def _rm_model(models, args):
     for model in models:
-        resolved_model = shortnames.resolve(model)
-        if resolved_model:
-            model = resolved_model
+        model = shortnames.resolve(model)
 
         try:
             m = New(model, args)
@@ -1503,6 +1497,11 @@ def inspect_cli(args):
 
 def main() -> None:
     def eprint(e, exit_code):
+        try:
+            if args.debug:
+                logger.exception(e)
+        except Exception:
+            pass
         perror("Error: " + str(e).strip("'\""))
         sys.exit(exit_code)
 
@@ -1531,6 +1530,8 @@ def main() -> None:
         eprint(e, errno.EINVAL)
     except NotImplementedError as e:
         eprint(e, errno.ENOSYS)
+    except subprocess.TimeoutExpired as e:
+        eprint(e, errno.ETIMEDOUT)
     except subprocess.CalledProcessError as e:
         eprint(e, e.returncode)
     except EndianMismatchError:

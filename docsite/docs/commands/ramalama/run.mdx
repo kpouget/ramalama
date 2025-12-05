@@ -18,7 +18,7 @@ description: run specified AI Model as a chatbot
 | HuggingFace   | huggingface://, hf://, hf.co/ | [`huggingface.co`](https://www.huggingface.co)|
 | ModelScope    | modelscope://, ms:// | [`modelscope.cn`](https://modelscope.cn/)|
 | Ollama        | ollama:// | [`ollama.com`](https://www.ollama.com)|
-| rlcr          | rlcr://   | [`ramalama.com`](https://registry.ramalama.com/projects/ramalama) |
+| rlcr          | rlcr://   | [`ramalama.com`](https://registry.ramalama.com) |
 | OCI Container Registries | oci:// | [`opencontainers.org`](https://opencontainers.org)|
 |||Examples: [`quay.io`](https://quay.io),  [`Docker Hub`](https://docker.io),[`Artifactory`](https://artifactory.com)|
 
@@ -33,7 +33,7 @@ URL support means if a model is on a web site or even on your local system, you 
 
 #### **--api**=**llama-stack** | none**
 unified API layer for Inference, RAG, Agents, Tools, Safety, Evals, and Telemetry.(default: none)
-The default can be overridden in the ramalama.conf file.
+The default can be overridden in the `ramalama.conf` file.
 
 #### **--authfile**=*password*
 path of the authentication file for OCI registries
@@ -77,9 +77,9 @@ OCI container image to run with specified AI model. RamaLama defaults to using
 images based on the accelerator it discovers. For example:
 `quay.io/ramalama/ramalama`. See the table below for all default images.
 The default image tag is based on the minor version of the RamaLama package.
-Version 0.14.0 of RamaLama pulls an image with a `:0.14` tag from the quay.io/ramalama OCI repository. The --image option overrides this default.
+Version 0.15.0 of RamaLama pulls an image with a `:0.15` tag from the quay.io/ramalama OCI repository. The --image option overrides this default.
 
-The default can be overridden in the ramalama.conf file or via the
+The default can be overridden in the `ramalama.conf` file or via the
 RAMALAMA_IMAGE environment variable. `export RAMALAMA_IMAGE=quay.io/ramalama/aiimage:1.2` tells
 RamaLama to use the `quay.io/ramalama/aiimage:1.2` image.
 
@@ -136,6 +136,8 @@ On Nvidia based GPU systems, RamaLama defaults to using the
 #### **--port**, **-p**=*port*
 Port for AI Model server to listen on (default: 8080)
 
+The default can be overridden in the `ramalama.conf` file.
+
 #### **--prefix**
 Prefix for the user prompt (default: 🦭 > )
 
@@ -180,6 +182,12 @@ Specify seed rather than using random seed model interaction
 
 #### **--selinux**=*true*
 Enable SELinux container separation
+
+#### **--summarize-after**=*N*
+Automatically summarize conversation history after N messages to prevent context growth.
+When enabled, ramalama will periodically condense older messages into a summary,
+keeping only recent messages and the summary. This prevents the context from growing
+indefinitely during long chat sessions. Set to 0 to disable (default: 4).
 
 #### **--temp**="0.8"
 Temperature of the response from the AI Model
@@ -257,7 +265,7 @@ $ ramalama run granite
 See [ramalama-cuda(7)](/docs/platform-guides/cuda) for setting up the host Linux system for CUDA support.
 
 ## See Also
-[ramalama(1)](/docs/commands/ramalama/), [ramalama-cuda(7)](/docs/platform-guides/cuda)
+[ramalama(1)](/docs/commands/ramalama/), [ramalama-cuda(7)](/docs/platform-guides/cuda), [ramalama.conf(5)](/docs/configuration/conf)
 
 ---
 
