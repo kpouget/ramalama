@@ -12,6 +12,7 @@ from ramalama.hf_style_repo_base import (
 )
 from ramalama.logger import logger
 from ramalama.model_store.snapshot_file import SnapshotFileType
+from ramalama.path_utils import create_file_link
 
 missing_huggingface = """This operation requires huggingface-cli which is not available.
 
@@ -117,31 +118,6 @@ class HuggingfaceRepositoryModel(HuggingfaceRepository):
             self.headers['Authorization'] = f"Bearer {token}"
 
 
-def get_repo_info(repo_name):
-    # Docs on API call:
-    # https://huggingface.co/docs/hub/en/api#get-apimodelsrepoid-or-apimodelsrepoidrevisionrevision
-    repo_info_url = f"https://huggingface.co/api/models/{repo_name}"
-    logger.debug(f"Fetching repo info from {repo_info_url}")
-    with urllib.request.urlopen(repo_info_url) as response:
-        if response.getcode() == 200:
-            repo_info = response.read().decode('utf-8')
-            return json.loads(repo_info)
-        else:
-            perror("Huggingface repo information pull failed")
-            raise KeyError(f"Response error code from repo info pull: {response.getcode()}")
-    return None
-
-
-def handle_repo_info(repo_name, repo_info, runtime):
-    if "safetensors" in repo_info and runtime == "llama.cpp":
-        perror(
-            "\nllama.cpp does not support running safetensor models, "
-            "please use a/convert to the GGUF format using:\n"
-            f"- https://huggingface.co/models?other=base_model:quantized:{repo_name} \n"
-            "- https://huggingface.co/spaces/ggml-org/gguf-my-repo"
-        )
-
-
 class Huggingface(HFStyleRepoModel):
     REGISTRY_URL = "https://huggingface.co/v2/"
     ACCEPT = "Accept: application/vnd.docker.distribution.manifest.v2+json"
@@ -154,6 +130,14 @@ class Huggingface(HFStyleRepoModel):
 
     def get_cli_command(self):
         return "hf"
+
+    def get_login_args(self):
+        """HuggingFace CLI uses 'hf auth login' instead of 'hf login'"""
+        return ["auth", "login"]
+
+    def get_logout_args(self):
+        """HuggingFace CLI uses 'hf auth logout' instead of 'hf logout'"""
+        return ["auth", "logout"]
 
     def get_missing_message(self):
         return missing_huggingface
@@ -221,7 +205,8 @@ class Huggingface(HFStyleRepoModel):
             if str(blob_file) != str(sha256_checksum):
                 continue
 
-            os.symlink(blob_path, target_path)
+            # Use cross-platform file linking (hardlink/symlink/copy)
+            create_file_link(str(blob_path), target_path)
             return True
         return False
 

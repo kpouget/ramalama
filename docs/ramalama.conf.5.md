@@ -88,17 +88,17 @@ RAMALAMA_IN_CONTAINER environment variable overrides this field.
 
 Size of the prompt context (0 = loaded from model)
 
-**env=[]
-
-Environment variables to be added to the environment used when running in a container engine (e.g., Podman, Docker). For example "LLAMA_ARG_THREADS=10".
-
 **engine**="podman"
 
 Run RamaLama using the specified container engine.
 Valid options are: Podman and Docker
 This field can be overridden by the RAMALAMA_CONTAINER_ENGINE environment variable.
 
-**#gguf_quantization_mode**="Q4_K_M"
+**env**=[]
+
+Environment variables to be added to the environment used when running in a container engine (e.g., Podman, Docker). For example "LLAMA_ARG_THREADS=10".
+
+**gguf_quantization_mode**="Q4_K_M"
 
 The quantization mode used when creating OCI formatted AI Models.
 Available options: Q2_K, Q3_K_S, Q3_K_M, Q3_K_L, Q4_0, Q4_K_S, Q4_K_M, Q5_0, Q5_K_S, Q5_K_M, Q6_K, Q8_0.
@@ -129,6 +129,12 @@ specified vllm model runtime.
 Pass `--group-add keep-groups` to podman, when using podman.
 In some cases this is needed to access the gpu from a rootless container
 
+**log_level**=warning
+Set the logging level of RamaLama application.
+Valid Values:
+    debug, info, warning, error critical
+Note: --debug option overrides this field and forces the system to debug
+
 **max_tokens**=0
 
 Maximum number of tokens to generate. Set to 0 for unlimited output (default: 0).
@@ -152,7 +158,8 @@ is based on the container engine used.
 
 **port**="8080"
 
-Specify default port for services to listen on
+Specify initial port for a range of 101 ports for services to listen on.
+If this port is unavailable, another free port from this range will be selected.
 
 **pull**="newer"
 
@@ -163,8 +170,19 @@ Specify default port for services to listen on
 
 **rag_format**="qdrant"
 
-Specify the default output format for output of the `ramalama rag` command
-Options: json, markdown, qdrant
+Specify the default output format for output of the `ramalama rag` command.
+Options: qdrant, json, markdown, milvus.
+
+**rag_images**="quay.io/ramalama/ramalama-rag"
+
+OCI container image to run with the specified AI model when using RAG content.
+
+`[[ramalama.rag_images]]`
+  CUDA_VISIBLE_DEVICES   = "quay.io/ramalama/cuda-rag"
+  HIP_VISIBLE_DEVICES    = "quay.io/ramalama/rocm-rag"
+  INTEL_VISIBLE_DEVICES  = "quay.io/ramalama/intel-gpu-rag"
+  GGML_VK_VISIBLE_DEVICES = "quay.io/ramalama/ramalama"
+
 
 **runtime**="llama.cpp"
 
@@ -178,6 +196,13 @@ SELinux container separation enforcement
 **store**="$HOME/.local/share/ramalama"
 
 Store AI Models in the specified directory
+
+**summarize_after**=4
+
+Automatically summarize conversation history after N messages to prevent context growth.
+When enabled, ramalama will periodically condense older messages into a summary,
+keeping only recent messages and the summary. This prevents the context from growing
+indefinitely during long chat sessions. Set to 0 to disable (default: 4).
 
 **temp**="0.8"
 Temperature of the response from the AI Model
@@ -203,3 +228,26 @@ The default -1, uses the default of the underlying implementation
 Specify the default transport to be used for pulling and pushing of AI Models.
 Options: oci, ollama, huggingface.
 RAMALAMA_TRANSPORT environment variable overrides this field.
+
+`[[ramalama.http_client]]`
+
+Http client configuration
+
+**max_retries**=5
+
+The maximum number of times to retry a failed download
+
+**max_retry_delay**=30
+
+The maximum delay between retry attempts in seconds
+
+## RAMALAMA.USER TABLE
+The ramalama.user table contains user preference settings.
+
+`[[ramalama.user]]`
+
+**no_missing_gpu_prompt**=false
+
+Suppress the interactive prompt when running on macOS with a Podman VM that does not support GPU acceleration (e.g., applehv provider). When set to true, RamaLama will automatically proceed without GPU support instead of prompting the user for confirmation. This is useful for automation and scripting scenarios where interactive prompts are not desired.
+
+Can also be set via the RAMALAMA_USER__NO_MISSING_GPU_PROMPT environment variable.

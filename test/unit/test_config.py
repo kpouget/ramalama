@@ -6,11 +6,13 @@ import pytest
 from ramalama.config import (
     DEFAULT_PORT,
     BaseConfig,
+    RamalamaImages,
     default_config,
     get_default_engine,
     get_default_store,
     load_env_config,
 )
+from ramalama.log_levels import LogLevel
 
 
 def test_correct_config_defaults(monkeypatch):
@@ -27,7 +29,7 @@ def test_correct_config_defaults(monkeypatch):
     assert cfg.env == []
     assert cfg.host == "0.0.0.0"
     assert cfg.image == cfg.default_image
-    assert isinstance(cfg.images, dict)
+    assert isinstance(cfg.images, RamalamaImages)
     assert cfg.api == "none"
     assert cfg.keep_groups is False
     assert cfg.ngl == -1
@@ -162,6 +164,31 @@ def test_cfg_container_not_set():
         with patch("ramalama.config.load_env_config", return_value={}):
             assert cfg.is_set("container") is False
             assert cfg.container is (cfg.engine is not None)
+
+
+def test_base_config_accepts_none_log_level():
+    cfg = BaseConfig(engine=None)
+    assert cfg.log_level is None
+
+
+def test_base_config_coerces_log_level_strings():
+    cfg = BaseConfig(engine=None, log_level="info")
+    assert cfg.log_level == LogLevel.INFO
+
+
+def test_load_env_config_coerces_log_level():
+    cfg = load_env_config({"RAMALAMA_LOG_LEVEL": "debug"})
+    assert cfg["log_level"] == LogLevel.DEBUG
+
+
+@pytest.mark.xfail(raises=ValueError)
+def test_load_env_config_invalid_log_level_raises():
+    load_env_config({"RAMALAMA_LOG_LEVEL": "notalevel"})
+
+
+@pytest.mark.xfail(raises=ValueError)
+def test_load_env_config_invalid_log_level_case_raises():
+    load_env_config({"RAMALAMA_LOG_LEVEL": "InVaLiD"})
 
 
 class TestGetDefaultEngine:
@@ -524,6 +551,7 @@ class TestConfigIntegration:
             assert cfg.threads == 8
             assert cfg.user.no_missing_gpu_prompt is True
             assert cfg.images["CUDA_VISIBLE_DEVICES"] == "env/cuda:latest"
+            assert cfg.images["HIP_VISIBLE_DEVICES"] == "quay.io/ramalama/rocm"
 
     def test_config_multiple_env_layers(self):
         """Test that multiple environment variable layers work correctly."""
@@ -627,11 +655,13 @@ class TestConfigIntegration:
             assert cfg.user.no_missing_gpu_prompt is True
 
             # Deep merged images
-            expected_images = {
-                "CUDA_VISIBLE_DEVICES": "custom/cuda:latest",  # from env
-                "INTEL_VISIBLE_DEVICES": "custom/intel:latest",  # from env
-                "HIP_VISIBLE_DEVICES": "quay.io/ramalama/rocm:latest",  # from file config
-            }
+            expected_images = RamalamaImages(
+                **{
+                    "CUDA_VISIBLE_DEVICES": "custom/cuda:latest",  # from env
+                    "INTEL_VISIBLE_DEVICES": "custom/intel:latest",  # from env
+                    "HIP_VISIBLE_DEVICES": "quay.io/ramalama/rocm:latest",  # from file config
+                }
+            )
             assert cfg.images == expected_images
 
     def test_config_is_set_behavior(self):

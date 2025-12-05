@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from argparse import Namespace
 
     from ramalama.arg_types import SUPPORTED_ENGINES, ContainerArgType
-    from ramalama.config import Config
+    from ramalama.config import Config, RamalamaImageConfig
     from ramalama.transports.base import Transport
 
 MNT_DIR = "/mnt/models"
@@ -226,10 +226,6 @@ def populate_volume_from_image(model: Transport, args: Namespace, output_filenam
     return volume
 
 
-def find_working_directory():
-    return os.path.dirname(__file__)
-
-
 def generate_sha256(to_hash: str, with_sha_prefix: bool = True) -> str:
     """
     Generates a sha256 for a string.
@@ -383,7 +379,7 @@ def check_nvidia() -> Literal["cuda"] | None:
     try:
         command = ['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader']
         result = run_cmd(command, encoding="utf-8")
-    except OSError:
+    except (OSError, subprocess.CalledProcessError):
         return None
 
     smi_lines = result.stdout.splitlines()
@@ -675,7 +671,7 @@ AccelImageArgs: TypeAlias = (
 )
 
 
-def accel_image(config: Config, images: dict[str, str] | None = None, conf_key: str = "image") -> str:
+def accel_image(config: Config, images: RamalamaImageConfig | None = None, conf_key: str = "image") -> str:
     """
     Selects and the appropriate image based on config, arguments, environment.
     "images" is a mapping of environment variable names to image names. If not specified, the
@@ -690,12 +686,20 @@ def accel_image(config: Config, images: dict[str, str] | None = None, conf_key: 
     if not images:
         images = config.images
 
-    if config.runtime == "vllm":
-        return config.images["VLLM"]
-
     set_gpu_type_env_vars()
     gpu_type = next(iter(get_gpu_type_env_vars()), "")
 
+    if config.runtime == "vllm":
+        # Check for GPU-specific VLLM image, with a fallback to the generic one.
+        image = None
+        if gpu_type:
+            image = config.images.get(f"VLLM_{gpu_type}")
+
+        if not image:
+            image = config.images.get("VLLM", "docker.io/vllm/vllm-openai")
+
+        # If the image from the config is specified by tag or digest, return it unmodified
+        return image if ":" in image else f"{image}:latest"
     # Get image based on detected GPU type
     image = images.get(gpu_type, getattr(config, f"default_{conf_key}"))
 

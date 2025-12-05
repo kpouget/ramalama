@@ -491,24 +491,32 @@ verify_begin=".*run --rm"
     model=tiny
     name=c_$(safename)
     run_ramalama pull ${model}
+    if [ -n "$RAMALAMA_STACK_IMAGE" ]; then
+        podman pull "$RAMALAMA_STACK_IMAGE"
+    fi
     run_ramalama serve -d --name=${name} --api llama-stack --dri off --port 1234 ${model}
     is "$output" ".*Llama Stack RESTAPI: http://localhost:1234" "reveal llama stack url"
     is "$output" ".*OpenAI RESTAPI: http://localhost:1234/v1/openai" "reveal openai url"
 
-### FIXME llama-stack image is currently broken.
     # Health check: wait for service to be responsive on http://localhost:1234
-#    for i in {1..10}; do
-#    	if curl -sSf http://localhost:1234/models > /dev/null; then
-#            echo "Service is responsive on http://localhost:1234/v1/openai/models"
-#            break
-#        fi
-#        sleep 1
-#    done
-#    if ! curl -sSf http://localhost:1234/v1/openai/models > /dev/null; then
-#        echo "ERROR: Service did not become responsive on http://localhost:1234" >&2
-#        run_ramalama stop ${name}
-#        exit 1
-#    fi
+    for i in {1..10}; do
+        if curl -sSf http://localhost:1234/v1/models; then
+            echo "Service is responsive on http://localhost:1234/v1/models"
+            break
+        fi
+        sleep 10
+    done
+    if ! curl -sSf http://localhost:1234/v1/openai/v1/models; then
+        echo "ERROR: Service did not become responsive on http://localhost:1234/v1/openai/v1/models" >&2
+        podman pod logs ${name}-pod
+        run_ramalama ps
+        run_ramalama stop ${name}
+        exit 1
+    fi
+
+    run_ramalama chat --url http://localhost:1234/v1/openai/v1 --model TinyLlama-1.1B-Chat-v1.0-GGUF "What is the diameter of the Earth?"
+    is "$output" ".*diameter" "llama-stack returns a reasonable response"
+
     run_ramalama ps
     run_ramalama stop ${name}
 
@@ -520,6 +528,10 @@ verify_begin=".*run --rm"
     is "$output" ".*hostPort: 1234" "Should container container port"
     is "$output" ".*quay.io/.*/llama-stack" "Should contain llama-stack"
     rm /tmp/$name.yaml
+
+    if [ -n "$RAMALAMA_STACK_IMAGE" ]; then
+        podman rmi "$RAMALAMA_STACK_IMAGE"
+    fi
 }
 
 @test "ramalama serve --image bogus" {
@@ -541,7 +553,7 @@ verify_begin=".*run --rm"
     run_ramalama --dryrun serve --rag quay.io/ramalama/rag --pull=never tiny
     is "${lines[0]}" ".*llama-server" "Expected to run llama-server"
     is "${lines[0]}" ".*--port 8081" "Expected to run llama-server on port 8081"
-    is "${lines[1]}" ".*quay.io/ramalama/.*-rag:" "Expected to use -rag image in separate container"
+    is "${lines[1]}" ".*quay.io/.*-rag" "Expected to use -rag image in separate container"
     is "${lines[1]}" ".*rag_framework serve" "Expected to run rag_framework in a separate container"
     is "${lines[1]}" ".*--port 8080" "Expected to run rag_framework on port 8080"
     is "${lines[1]}" ".*--mount=type=image,source=quay.io/ramalama/rag,destination=/rag,rw=true" "Expected RAG image to be mounted into separate container"

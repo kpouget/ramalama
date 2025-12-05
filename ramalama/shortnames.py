@@ -1,7 +1,6 @@
 import configparser
 import os
 import sysconfig
-import tempfile
 
 
 class Shortnames:
@@ -14,14 +13,31 @@ class Shortnames:
         file_paths = [
             "./shortnames/shortnames.conf",  # for development
             "./shortnames.conf",  # for development
-            os.path.expanduser("~/.config/ramalama/shortnames.conf"),
             f"{data_path}/share/ramalama/shortnames.conf",
-            os.path.expanduser("~/.local/share/ramalama/shortnames.conf"),
-            os.path.expanduser("~/.local/pipx/venvs/ramalama/share/ramalama/shortnames.conf"),
-            "/etc/ramalama/shortnames.conf",
-            "/usr/share/ramalama/shortnames.conf",
-            "/usr/local/share/ramalama/shortnames.conf",
         ]
+
+        if os.name == 'nt':
+            # Windows-specific paths using APPDATA and LOCALAPPDATA
+            appdata = os.getenv("APPDATA", os.path.expanduser("~/AppData/Roaming"))
+            localappdata = os.getenv("LOCALAPPDATA", os.path.expanduser("~/AppData/Local"))
+            file_paths.extend(
+                [
+                    os.path.join(localappdata, "ramalama", "shortnames.conf"),
+                    os.path.join(appdata, "ramalama", "shortnames.conf"),
+                ]
+            )
+        else:
+            # Unix-specific paths using XDG conventions
+            file_paths.extend(
+                [
+                    os.path.expanduser("~/.config/ramalama/shortnames.conf"),
+                    os.path.expanduser("~/.local/share/ramalama/shortnames.conf"),
+                    os.path.expanduser("~/.local/pipx/venvs/ramalama/share/ramalama/shortnames.conf"),
+                    "/etc/ramalama/shortnames.conf",
+                    "/usr/share/ramalama/shortnames.conf",
+                    "/usr/local/share/ramalama/shortnames.conf",
+                ]
+            )
 
         self.paths = []
         for file_path in file_paths:
@@ -38,14 +54,4 @@ class Shortnames:
         return s.strip("'\"")
 
     def resolve(self, model) -> str | None:
-        return self.shortnames.get(model)
-
-    def create_shortname_file(self) -> str:
-        shortnamefile = tempfile.NamedTemporaryFile(prefix='RamaLama_shortname_', delete=False)
-        # Open the file for writing.
-        with open(shortnamefile.name, 'w') as c:
-            c.write('[shortnames]\n')
-            for shortname in self.shortnames:
-                c.write('"%s"="%s"\n' % (shortname, self.shortnames.get(shortname)))
-            c.flush()
-        return shortnamefile.name
+        return self.shortnames.get(model, model)

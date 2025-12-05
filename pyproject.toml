@@ -38,6 +38,7 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Intended Audience :: System Administrators",
   "Operating System :: MacOS :: MacOS X",
+  "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
@@ -59,10 +60,10 @@ dev = [
     "black~=25.0",
     "codespell~=2.0",
     "flake8~=7.0",
-    "huggingface_hub~=1.0.0",
+    "huggingface_hub~=1.1.2",
     "hypothesis>=6.135.26",
     "isort~=7.0",
-    "pytest~=8.3",
+    "pytest~=9.0",
     "wheel~=0.45.0",
     "mypy",
     "types-PyYAML",
@@ -112,7 +113,6 @@ version = {attr = "ramalama.version.version"}
 [tool.black]
 line-length = 120
 skip-string-normalization = true
-preview = true
 target-version = ["py310", "py311", "py312", "py313"]
 extend-exclude = "(.history|build|dist|docs|hack)"
 

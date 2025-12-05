@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -83,7 +83,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
 
@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -156,7 +156,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -193,7 +193,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -252,7 +252,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -284,7 +284,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -295,6 +295,11 @@ jobs:
         shell: bash
         run: |
            df -h
+           # /mnt has ~ 65 GB free disk space. / is too small.
+           sudo mkdir -m a=rwx -p /mnt/runner
+           sudo mkdir -m o=rwx -p /home/runner/.local
+           sudo chown runner:runner /mnt/runner /home/runner/.local
+           sudo mount --bind /mnt/runner /home/runner/.local
            sudo apt-get update
            sudo apt-get install podman bash codespell
            uv tool install tox --with tox-uv
@@ -324,7 +329,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -365,7 +370,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -428,7 +433,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
