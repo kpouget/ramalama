@@ -10,7 +10,7 @@ dnf_install_remoting() {
     rpm -i --nosignature --nodeps libdrm-devel-${LIBDRM_VERSION}.rpm
 
     if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
-        dnf install -y meson libepoxy-devel
+        dnf install -y meson libepoxy-devel python3-yaml
     fi
 }
 
