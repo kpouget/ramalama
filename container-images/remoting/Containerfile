@@ -14,3 +14,6 @@ ENV RENDER_SERVER_EXEC_PATH=/usr/libexec/virgl_render_server
 ENV VIRGL_APIR_BACKEND_LIBRARY=/usr/lib64/libggml-remotingbackend.so
 ENV RENDER_SERVER_EXEC_PATH=/usr/libexec/virgl_render_server
 ENV APIR_LLAMA_CPP_GGML_LIBRARY_PATH=/usr/lib64/libggml-vulkan.so
+
+ENV GGML_DISABLE_VULKAN=1
+ENV GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1
