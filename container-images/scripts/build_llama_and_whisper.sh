@@ -315,7 +315,7 @@ clone_and_build_virglrender() {
     virgl_repo=${VIRGL_REPO:-https://gitlab.freedesktop.org/kpouget/virglrenderer}
     git_clone_specific_commit "$virgl_repo" "$virgl_commit"
 
-    meson setup ./build -Dapir=true --buildtype=debug --prefix=/usr
+    meson setup ./build -Dvenus=true -Dapir=true --buildtype=debug --prefix=/usr
     ninja -C ./build
     ninja -C ./build install
 
