@@ -1,10 +1,12 @@
 import itertools
 import json
 import logging
+import os
+import platform
 import random
 import re
 import string
-from contextlib import chdir
+from contextlib import contextmanager
 from pathlib import Path
 from subprocess import STDOUT, CalledProcessError
 from test.conftest import (
@@ -18,6 +20,17 @@ from test.conftest import (
 from test.e2e.utils import RamalamaExecWorkspace, check_output, get_full_model_name
 
 import pytest
+
+
+@contextmanager
+def chdir(path):
+    old_dir = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(old_dir)
+
 
 DRY_RUN_TEST_MODEL = "dry_run_model"
 RAMALAMA_DRY_RUN = ["ramalama", "-q", "--dryrun", "serve"]
@@ -55,7 +68,7 @@ def test_basic_dry_run():
             id="check model name", marks=skip_if_no_container
         ),
         pytest.param(
-            [], r".*--name ramalama_.", None, None, True,
+            [], r".*--name ramalama-.", None, None, True,
             id="check default --name flag", marks=skip_if_no_container
         ),
         pytest.param(
@@ -115,11 +128,13 @@ def test_basic_dry_run():
         ),
         pytest.param(
             ["--seed", "1234", "--name", "foobar"], r".*--seed 1234",
-            None, {"RAMALAMA_CONFIG": "/dev/null"}, True,
+            None, {"RAMALAMA_CONFIG": "NUL" if platform.system() == "Windows" else '/dev/null'}, True,
             id="check --seed 1234 with RAMALAMA_CONFIG=/dev/null", marks=skip_if_no_container,
         ),
         pytest.param(
-            ["--name", "foobar"], r".*--pull newer", None, {"RAMALAMA_CONFIG": "/dev/null"}, True,
+            ["--name", "foobar"], r".*--pull newer", None, {
+                "RAMALAMA_CONFIG": "NUL" if platform.system() == "Windows" else '/dev/null'
+            }, True,
             id="check pull policy with RAMALAMA_CONFIG=/dev/null", marks=[skip_if_no_container, skip_if_docker],
         ),
         pytest.param(
@@ -541,11 +556,11 @@ def test_quadlet_and_kube_generation_with_container_registry(container_registry,
         for item in itertools.product(
             [
                 "kube",
-                "kube:{tmp_dir}/output",
+                "kube:{tmp_dir}{sep}output",
                 "quadlet/kube",
-                "quadlet/kube:{tmp_dir}/output",
+                "quadlet/kube:{tmp_dir}{sep}output",
                 "compose",
-                "compose:{tmp_dir}/output",
+                "compose:{tmp_dir}{sep}output",
             ],
             [None, {"HIP_VISIBLE_DEVICES": "99"}],
         )
@@ -558,7 +573,9 @@ def test_serve_kube_generation(test_model, generate, env_vars):
 
         # Define the output dir if it's required and ensure it is created
         output_dir = (
-            Path(ctx.workspace_dir) / "output" if generate.endswith(":{tmp_dir}/output") else Path(ctx.workspace_dir)
+            Path(ctx.workspace_dir) / "output"
+            if generate.endswith(":{tmp_dir}{sep}output")
+            else Path(ctx.workspace_dir)
         )
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -572,7 +589,7 @@ def test_serve_kube_generation(test_model, generate, env_vars):
                 "--port",
                 "1234",
                 "--generate",
-                generate.format(tmp_dir=ctx.workspace_dir),
+                generate.format(tmp_dir=ctx.workspace_dir, sep=os.sep),
                 test_model,
             ]
         )
@@ -607,7 +624,7 @@ def test_serve_kube_generation(test_model, generate, env_vars):
                     if "kube" in generate:
                         assert re.search(r".*env:", content)
                         assert re.search(r".*name: HIP_VISIBLE_DEVICES", content)
-                        assert re.search(r".*value: 99", content)
+                        assert re.search(r".*value: \"99\"", content)
                     elif "compose" in generate:
                         assert re.search(r".*environment:", content)
                         assert re.search(r".*- HIP_VISIBLE_DEVICES=99", content)
@@ -734,7 +751,7 @@ def test_serve_with_non_existing_images():
                 stderr=STDOUT,
             )
         assert exc_info.value.returncode == 22
-        assert re.search(r"Error: quay.io/ramalama/rag: image not known.*", exc_info.value.output.decode("utf-8"))
+        assert re.search(r"Error: quay.io/ramalama/rag does not exist.*", exc_info.value.output.decode("utf-8"))
 
 
 @pytest.mark.e2e

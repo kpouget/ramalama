@@ -18,10 +18,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bash codespell podman
           uv run -- make install-requirements
 
       - name: Run format check
@@ -79,32 +76,23 @@ jobs:
           ./container_build.sh build -s ramalama
 
   unit-test:
-    name: Unit Tests
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - title: ""
+            uv-options: {}
+          - title: " (python 3.10)"
+            uv-options:
+              python-version: '3.10'
+    name: Unit Tests${{ matrix.variant.title }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          df -h
-          sudo apt-get update
-          sudo apt-get install -y bash codespell pipx podman
-          uv run -- make install-requirements
-
-      - name: Upgrade to podman 5
-        run: |
-           set -e
-           # Enable universe repository which contains podman
-           sudo add-apt-repository "deb http://old-releases.ubuntu.com/ubuntu oracular universe"
-           # Update package lists
-           sudo apt-get update
-           sudo apt-get purge firefox
-           # Install specific podman version
-           sudo apt-get upgrade -y podman crun
+        with: ${{ matrix.variant.uv-options }}
 
       - name: Run unit tests
         run: |
@@ -280,7 +268,18 @@ jobs:
            uv run -- make bats-nocontainer
 
   e2e-tests:
-    name: E2E Tests
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - title: ""
+            uv-options:
+              activate-environment: true
+          - title: " (python 3.10)"
+            uv-options:
+              python-version: '3.10'
+              activate-environment: true
+    name: E2E Tests${{ matrix.variant.title }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -288,8 +287,7 @@ jobs:
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-        with:
-          activate-environment: true
+        with: ${{ matrix.variant.uv-options }}
 
       - name: install requirements
         shell: bash
@@ -325,7 +323,18 @@ jobs:
            make e2e-tests
 
   e2e-tests-nocontainer:
-    name: E2E Tests (--no-container)
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - title: ""
+            uv-options:
+              activate-environment: true
+          - title: " (python 3.10)"
+            uv-options:
+              python-version: '3.10'
+              activate-environment: true
+    name: E2E Tests (--no-container)${{ matrix.variant.title }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -333,8 +342,7 @@ jobs:
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-        with:
-          activate-environment: true
+        with: ${{ matrix.variant.uv-options }}
 
       - name: install requirements
         shell: bash
@@ -366,7 +374,18 @@ jobs:
            make e2e-tests-nocontainer
 
   e2e-tests-docker:
-    name: E2E Tests (docker)
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - title: ""
+            uv-options:
+              activate-environment: true
+          - title: " (python 3.10)"
+            uv-options:
+              python-version: '3.10'
+              activate-environment: true
+    name: E2E Tests (docker)${{ matrix.variant.title }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -374,8 +393,7 @@ jobs:
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-        with:
-          activate-environment: true
+        with: ${{ matrix.variant.uv-options }}
 
       - name: install requirements
         shell: bash
@@ -429,7 +447,18 @@ jobs:
            make e2e-tests-docker
 
   e2e-tests-macos:
-    name: E2E Tests (macos)
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - title: ""
+            uv-options:
+              activate-environment: true
+          - title: " (python 3.10)"
+            uv-options:
+              python-version: '3.10'
+              activate-environment: true
+    name: E2E Tests (MacOS)${{ matrix.variant.title }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -437,9 +466,7 @@ jobs:
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-        with:
-          activate-environment: true
-          python-version: '<3.14'
+        with: ${{ matrix.variant.uv-options }}
 
       - name: install mlx-lm
         shell: bash
@@ -461,6 +488,139 @@ jobs:
         shell: bash
         run: |
           make e2e-tests-nocontainer
+
+  e2e-tests-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - title: ""
+            uv-options:
+              activate-environment: true
+          - title: " (python 3.10)"
+            uv-options:
+              python-version: '3.10'
+              activate-environment: true
+    name: E2E Tests (Windows)${{ matrix.variant.title }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with: ${{ matrix.variant.uv-options }}
+
+      - name: Update WSL2
+        shell: pwsh
+        run: |
+          Write-Host "Updating WSL2..."
+          wsl --update
+          wsl --shutdown
+
+      - name: Install Podman
+        shell: pwsh
+        run: |
+          Write-Host "Installing Podman on Windows..."
+
+          winget install --accept-source-agreements --silent --disable-interactivity --exact --id RedHat.Podman
+
+          # TODO: remove when this just works https://github.com/microsoft/winget-cli/issues/549
+          # Add Podman to PATH for current session
+          $podmanPath = "$env:ProgramFiles" + "\RedHat\Podman"
+          $env:PATH = "$podmanPath;$env:PATH"
+          [Environment]::SetEnvironmentVariable("PATH", $env:PATH, [EnvironmentVariableTarget]::Process)
+
+          # Update PATH for future steps
+          Add-Content -Path $env:GITHUB_PATH -Value "$podmanPath"
+
+          Write-Host "Verifying Podman installation..."
+          podman --version
+
+          Write-Host "Initializing Podman machine..."
+          podman machine init --now --rootful
+
+          # Wait for Podman to be ready
+          $maxAttempts = 30
+          $attempt = 0
+          while ($attempt -lt $maxAttempts) {
+              try {
+                  podman info | Out-Null
+                  Write-Host "Podman is ready!"
+                  break
+              }
+              catch {
+                  $attempt++
+                  Write-Host "Waiting for Podman to be ready (attempt $attempt/$maxAttempts)..."
+                  Start-Sleep -Seconds 2
+              }
+          }
+
+          if ($attempt -eq $maxAttempts) {
+              Write-Error "Podman failed to start"
+              exit 1
+          }
+
+          Write-Host "Podman info:"
+          podman info
+
+      - name: Install OpenSSL
+        shell: pwsh
+        run: |
+          winget install --accept-source-agreements --silent --disable-interactivity --exact --id ShiningLight.OpenSSL.Light
+
+          # Add OpenSSL to PATH for current session
+          $opensslPath = "$env:ProgramFiles" + "\OpenSSL-Win64\bin"
+          $env:PATH = "$opensslPath;$env:PATH"
+          [Environment]::SetEnvironmentVariable("PATH", $env:PATH, [EnvironmentVariableTarget]::Process)
+
+          # Update PATH for future steps
+          Add-Content -Path $env:GITHUB_PATH -Value "$opensslPath"
+
+          openssl version
+
+      - name: Run E2E tests
+        shell: pwsh
+        env:
+          RAMALAMA_CONTAINER_ENGINE: podman
+        run: |
+          Write-Host "Running E2E tests..."
+          # Add uv tools to PATH
+          $uvToolsPath = "$env:USERPROFILE\.local\bin"
+          $env:PATH = "$uvToolsPath;$env:PATH"
+
+          # Run tests
+          uv run tox -e e2e -- -v
+
+      - name: Debug - Show Podman logs on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host "=== Podman Machine List ==="
+          podman machine list
+
+          Write-Host "`n=== Podman System Connection List ==="
+          podman system connection list
+
+          Write-Host "`n=== Podman Info ==="
+          podman info || true
+
+          Write-Host "`n=== Podman Version ==="
+          podman version || true
+
+          Write-Host "`n=== Running Containers ==="
+          podman ps -a || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-e2e-test-results
+          path: |
+            test-results/
+            *.log
+          retention-days: 7
 
 # FIXME: ci script should be able to run on MAC.
 #      - name: Run ci

@@ -46,6 +46,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Utilities",
 ]
@@ -57,10 +58,11 @@ text = "MIT"
 dev = [
     # "pytest>=7.0",
     "argcomplete~=3.0",
+    "bcrypt",
     "black~=25.0",
     "codespell~=2.0",
     "flake8~=7.0",
-    "huggingface_hub~=1.1.2",
+    "huggingface_hub~=1.2.1",
     "hypothesis>=6.135.26",
     "isort~=7.0",
     "pytest~=9.0",
@@ -68,7 +70,7 @@ dev = [
     "mypy",
     "types-PyYAML",
     "types-jsonschema",
-    "tox"
+    "tox",
 ]
 
 cov = [
