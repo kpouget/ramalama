@@ -235,10 +235,10 @@ configure_common_flags() {
     common_flags+=("-DGGML_MUSA=ON")
     ;;
   remoting)
-      common_flags+=("-DGGML_REMOTINGFRONTEND=ON")
+      common_flags+=("-DGGML_VIRTGPU=ON")
 
       if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
-          common_flags+=("-DGGML_REMOTINGBACKEND=ON")
+          common_flags+=("-DGGML_VIRTGPU_BACKEND=ON")
 
           if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" == "vulkan" ]; then
               common_flags+=("-DGGML_VULKAN=ON")
