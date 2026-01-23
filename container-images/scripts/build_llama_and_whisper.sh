@@ -350,7 +350,7 @@ main() {
   fi
 
   setup_build_env
-  if [ "$uname_m" != "s390x" ]; then
+  if[ "$uname_m" != "s390x" && "$containerfile" != "remoting" ]; then
     clone_and_build_whisper_cpp
   fi
 
