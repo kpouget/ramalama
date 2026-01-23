@@ -238,7 +238,7 @@ configure_common_flags() {
       common_flags+=("-DGGML_VIRTGPU=ON")
 
       if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
-          common_flags+=("-DGGML_VIRTGPU_BACKEND=ON")
+          common_flags+=("-DGGML_VIRTGPU_BACKEND=ON -DDGGML_BACKEND_DL=ON")
 
           if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" == "vulkan" ]; then
               common_flags+=("-DGGML_VULKAN=ON")
