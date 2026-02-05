@@ -106,10 +106,11 @@ dnf_install() {
     dnf_install_cann
   elif [ "$containerfile" = "remoting" ]; then
     dnf_install_remoting
-  fi
 
-  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
-      dnf install -y gdb strace
+    if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" == "vulkan" ]; then
+        # install Vulkan for running it as a (Linux) backend remoting library
+        dnf install -y mesa-vulkan-drivers "${vulkan_rpms[@]}"
+    fi
   fi
 
   dnf -y clean all
@@ -146,6 +147,19 @@ dnf_install_runtime_deps() {
     )
   elif [ "$containerfile" = "remoting" ]; then
     runtime_pkgs+=(libdrm)
+    if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" == "vulkan" ]; then
+        # install Vulkan for running it as a (Linux) backend remoting library
+        dnf copr enable -y slp/mesa-libkrun-vulkan
+        runtime_pkgs+=(vulkan-loader vulkan-tools "mesa-vulkan-drivers-$MESA_VULKAN_VERSION")
+    fi
+  fi
+  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
+      runtime_pkgs+=(gdb strace)
+  fi
+
+  if [ ${#runtime_pkgs[@]} -eq 0 ]; then
+      echo "No runtime dependency to install for '$containerfile'"
+      return
   fi
   dnf install -y --setopt=install_weak_deps=false "${runtime_pkgs[@]}"
   dnf -y clean all
