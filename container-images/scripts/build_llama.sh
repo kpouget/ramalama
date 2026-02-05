@@ -153,6 +153,9 @@ dnf_install_runtime_deps() {
         runtime_pkgs+=(vulkan-loader vulkan-tools "mesa-vulkan-drivers-$MESA_VULKAN_VERSION")
     fi
   fi
+  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
+      runtime_pkgs+=(gdb strace)
+  fi
 
   if [ ${#runtime_pkgs[@]} -eq 0 ]; then
       echo "No runtime dependency to install for '$containerfile'"
@@ -258,10 +261,10 @@ configure_common_flags() {
     common_flags+=("-DGGML_MUSA=ON" "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined")
     ;;
   remoting)
-      common_flags+=("-DGGML_VIRTGPU=ON")
+      common_flags+=("-DGGML_VIRTGPU=ON -DDGGML_BACKEND_DL=OFF")
 
       if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" ]; then
-          common_flags+=("-DGGML_VIRTGPU_BACKEND=ON -DDGGML_BACKEND_DL=ON")
+          common_flags+=("-DGGML_VIRTGPU_BACKEND=ON")
 
           if [ "${RAMALAMA_IMAGE_BUILD_REMOTING_BACKEND:-}" == "vulkan" ]; then
               common_flags+=("-DGGML_VULKAN=ON")

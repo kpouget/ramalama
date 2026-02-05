@@ -21,6 +21,7 @@ ENV RENDER_SERVER_EXEC_PATH=/usr/libexec/virgl_render_server
 
 ENV VIRGL_APIR_BACKEND_LIBRARY=/usr/bin/libggml-virtgpu-backend.so
 ENV APIR_LLAMA_CPP_GGML_LIBRARY_PATH=/usr/bin/libggml-vulkan.so
+ENV APIR_LLAMA_CPP_GGML_LIBRARY_REG=ggml_backend_vk_reg
 
 ENV VIRGL_ROUTE_VENUS_TO_APIR=1
 ENV GGML_DISABLE_VULKAN=1
