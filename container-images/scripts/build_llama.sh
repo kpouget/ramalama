@@ -108,10 +108,6 @@ dnf_install() {
     dnf_install_remoting
   fi
 
-  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
-      dnf install -y gdb strace
-  fi
-
   dnf -y clean all
 }
 
@@ -144,6 +140,14 @@ dnf_install_runtime_deps() {
       intel-oneapi-mkl-core intel-oneapi-mkl-sycl-blas intel-oneapi-mkl-sycl-dft
       oneapi-level-zero
     )
+  fi
+  if [[ "${RAMALAMA_IMAGE_BUILD_DEBUG_MODE:-}" == y ]]; then
+      runtime_pkgs+=(gdb strace)
+  fi
+
+  if [ ${#runtime_pkgs[@]} -eq 0 ]; then
+      echo "No runtime dependency to install for '$containerfile'"
+      return
   fi
   dnf install -y --setopt=install_weak_deps=false "${runtime_pkgs[@]}"
   dnf -y clean all
